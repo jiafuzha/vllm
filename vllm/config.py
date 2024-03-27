@@ -162,7 +162,8 @@ class ModelConfig:
         self.tokenizer_mode = tokenizer_mode
 
     def _verify_quantization(self) -> None:
-        supported_quantization = ["awq", "gptq", "squeezellm", "marlin"]
+        # ====NS changes to add 'neuralspeed' quantization
+        supported_quantization = ["awq", "gptq", "squeezellm", "marlin", "neuralspeed"]
         rocm_not_supported_quantization = ["awq", "marlin"]
         if self.quantization is not None:
             self.quantization = self.quantization.lower()
@@ -581,8 +582,9 @@ class DeviceConfig:
                 self.device_type = "cuda"
             elif is_neuron():
                 self.device_type = "neuron"
+            # ====NS changes to support 'cpu' device
             else:
-                raise RuntimeError("No supported device detected.")
+                self.device_type = "cpu"
         else:
             # Device type is assigned explicitly
             self.device_type = device

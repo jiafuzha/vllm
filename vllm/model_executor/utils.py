@@ -11,6 +11,8 @@ from vllm.config import DeviceConfig, ModelConfig
 DEVICE_TO_MODEL_LOADER_MAP = {
     "cuda": "model_loader",
     "neuron": "neuron_model_loader",
+    # ====NS changes to add cpu_model_loader
+    "cpu": "cpu_model_loader"
 }
 
 

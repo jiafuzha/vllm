@@ -7,7 +7,7 @@ import vllm
 from vllm.lora.request import LoRARequest
 from vllm.config import (CacheConfig, DeviceConfig, ModelConfig,
                          ParallelConfig, SchedulerConfig, LoRAConfig)
-from vllm.core.scheduler import Scheduler, SchedulerOutputs
+from vllm.core.scheduler_ns import SchedulerNs, SchedulerOutputsNs
 from vllm.engine.arg_utils import EngineArgs
 from vllm.executor.executor_base import ExecutorBase
 from vllm.engine.metrics import StatLogger, Stats
@@ -110,7 +110,9 @@ class LLMEngine:
         # Create the scheduler.
         # NOTE: the cache_config here have been updated with the numbers of
         # GPU and CPU blocks, which are profiled in the distributed executor.
-        self.scheduler = Scheduler(scheduler_config, cache_config, lora_config)
+        # ====NS changes it to SchedulerNs
+        # self.scheduler = Scheduler(scheduler_config, cache_config, lora_config)
+        self.scheduler = SchedulerNs(scheduler_config, cache_config, lora_config)
 
         # Metric Logging.
         if self.log_stats:
@@ -131,11 +133,21 @@ class LLMEngine:
             initialize_ray_cluster(parallel_config)
             from vllm.executor.ray_gpu_executor import RayGPUExecutor
             executor_class = RayGPUExecutor
-        else:
+            #TODO: add RayCPUExecutor
+        # ====NS changes to check cuda device
+        elif engine_args.device.lower() == "cuda":
             assert parallel_config.world_size == 1, (
                 "Ray is required if parallel_config.world_size > 1.")
             from vllm.executor.gpu_executor import GPUExecutor
             executor_class = GPUExecutor
+        # ====NS changes to add CPUExecutor for 'neuralspeed' quantization    
+        else:
+            assert parallel_config.world_size == 1, (
+                "Ray is required if parallel_config.world_size > 1.")
+            assert engine_args.quantization == "neuralspeed", (
+                "quantization should be neuralspeed if device is CPU.")
+            from vllm.executor.cpu_executor import CPUExecutor
+            executor_class = CPUExecutor
 
         # Create the LLM engine.
         engine = cls(*engine_configs,
@@ -531,7 +543,8 @@ class LLMEngine:
 
     def _process_model_outputs(
             self, output: SamplerOutput,
-            scheduler_outputs: SchedulerOutputs) -> List[RequestOutput]:
+            # ====NS changes to SchedulerOutputsNs
+            scheduler_outputs: SchedulerOutputsNs) -> List[RequestOutput]:
         now = time.time()
         # Update the scheduled sequence groups with the model outputs.
         scheduled_seq_groups = scheduler_outputs.scheduled_seq_groups
@@ -633,7 +646,8 @@ class LLMEngine:
             self.stat_logger.log(self._get_stats(scheduler_outputs=None))
 
     def _get_stats(self,
-                   scheduler_outputs: Optional[SchedulerOutputs]) -> Stats:
+                   # ====NS changes to SchedulerOutputsNs
+                   scheduler_outputs: Optional[SchedulerOutputsNs]) -> Stats:
         """Get Stats to be Logged to Prometheus."""
         now = time.time()
 

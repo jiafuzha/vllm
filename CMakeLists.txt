@@ -101,8 +101,8 @@ elseif(HIP_FOUND)
     message(WARNING "Pytorch version ${TORCH_SUPPORTED_VERSION_ROCM_6X} "
       "expected for ROCMm 6.x build, saw ${Torch_VERSION} instead.")
   endif()
-else()
-  message(FATAL_ERROR "Can't find CUDA or HIP installation.")
+# else()
+#   message(FATAL_ERROR "Can't find CUDA or HIP installation.")
 endif()
 
 #
@@ -110,16 +110,16 @@ endif()
 # the supported versions for the current language.
 # The final set of arches is stored in `VLLM_GPU_ARCHES`.
 #
-override_gpu_arches(VLLM_GPU_ARCHES
-  ${VLLM_GPU_LANG}
-  "${${VLLM_GPU_LANG}_SUPPORTED_ARCHS}")
+# override_gpu_arches(VLLM_GPU_ARCHES
+#   ${VLLM_GPU_LANG}
+#   "${${VLLM_GPU_LANG}_SUPPORTED_ARCHS}")
 
 #
 # Query torch for additional GPU compilation flags for the given
 # `VLLM_GPU_LANG`.
 # The final set of arches is stored in `VLLM_GPU_FLAGS`.
 #
-get_torch_gpu_compiler_flags(VLLM_GPU_FLAGS ${VLLM_GPU_LANG})
+# get_torch_gpu_compiler_flags(VLLM_GPU_FLAGS ${VLLM_GPU_LANG})
 
 #
 # Set nvcc parallelism.
@@ -136,113 +136,113 @@ endif()
 # _C extension
 #
 
-set(VLLM_EXT_SRC
-  "csrc/cache_kernels.cu"
-  "csrc/attention/attention_kernels.cu"
-  "csrc/pos_encoding_kernels.cu"
-  "csrc/activation_kernels.cu"
-  "csrc/layernorm_kernels.cu"
-  "csrc/quantization/squeezellm/quant_cuda_kernel.cu"
-  "csrc/quantization/gptq/q_gemm.cu"
-  "csrc/cuda_utils_kernels.cu"
-  "csrc/moe_align_block_size_kernels.cu"
-  "csrc/pybind.cpp")
+# set(VLLM_EXT_SRC
+#   "csrc/cache_kernels.cu"
+#   "csrc/attention/attention_kernels.cu"
+#   "csrc/pos_encoding_kernels.cu"
+#   "csrc/activation_kernels.cu"
+#   "csrc/layernorm_kernels.cu"
+#   "csrc/quantization/squeezellm/quant_cuda_kernel.cu"
+#   "csrc/quantization/gptq/q_gemm.cu"
+#   "csrc/cuda_utils_kernels.cu"
+#   "csrc/moe_align_block_size_kernels.cu"
+#   "csrc/pybind.cpp")
 
-if(VLLM_GPU_LANG STREQUAL "CUDA")
-  list(APPEND VLLM_EXT_SRC
-    "csrc/quantization/awq/gemm_kernels.cu"
-    "csrc/quantization/marlin/marlin_cuda_kernel.cu"
-    "csrc/custom_all_reduce.cu")
-endif()
+# if(VLLM_GPU_LANG STREQUAL "CUDA")
+#   list(APPEND VLLM_EXT_SRC
+#     "csrc/quantization/awq/gemm_kernels.cu"
+#     "csrc/quantization/marlin/marlin_cuda_kernel.cu"
+#     "csrc/custom_all_reduce.cu")
+# endif()
 
-define_gpu_extension_target(
-  _C
-  DESTINATION vllm
-  LANGUAGE ${VLLM_GPU_LANG}
-  SOURCES ${VLLM_EXT_SRC}
-  COMPILE_FLAGS ${VLLM_GPU_FLAGS}
-  ARCHITECTURES ${VLLM_GPU_ARCHES}
-  WITH_SOABI)
+# define_gpu_extension_target(
+#   _C
+#   DESTINATION vllm
+#   LANGUAGE ${VLLM_GPU_LANG}
+#   SOURCES ${VLLM_EXT_SRC}
+#   COMPILE_FLAGS ${VLLM_GPU_FLAGS}
+#   ARCHITECTURES ${VLLM_GPU_ARCHES}
+#   WITH_SOABI)
 
 #
 # _moe_C extension
 #
 
-set(VLLM_MOE_EXT_SRC
-  "csrc/moe/moe_ops.cpp"
-  "csrc/moe/topk_softmax_kernels.cu")
+# set(VLLM_MOE_EXT_SRC
+#   "csrc/moe/moe_ops.cpp"
+#   "csrc/moe/topk_softmax_kernels.cu")
 
-define_gpu_extension_target(
-  _moe_C
-  DESTINATION vllm
-  LANGUAGE ${VLLM_GPU_LANG}
-  SOURCES ${VLLM_MOE_EXT_SRC}
-  COMPILE_FLAGS ${VLLM_GPU_FLAGS}
-  ARCHITECTURES ${VLLM_GPU_ARCHES}
-  WITH_SOABI)
+# define_gpu_extension_target(
+#   _moe_C
+#   DESTINATION vllm
+#   LANGUAGE ${VLLM_GPU_LANG}
+#   SOURCES ${VLLM_MOE_EXT_SRC}
+#   COMPILE_FLAGS ${VLLM_GPU_FLAGS}
+#   ARCHITECTURES ${VLLM_GPU_ARCHES}
+#   WITH_SOABI)
 
 #
 # _punica_C extension
 #
 
-set(VLLM_PUNICA_EXT_SRC
-  "csrc/punica/bgmv/bgmv_bf16_bf16_bf16.cu"
-  "csrc/punica/bgmv/bgmv_bf16_bf16_fp16.cu"
-  "csrc/punica/bgmv/bgmv_bf16_fp16_bf16.cu"
-  "csrc/punica/bgmv/bgmv_bf16_fp16_fp16.cu"
-  "csrc/punica/bgmv/bgmv_bf16_fp32_bf16.cu"
-  "csrc/punica/bgmv/bgmv_bf16_fp32_fp16.cu"
-  "csrc/punica/bgmv/bgmv_fp16_bf16_bf16.cu"
-  "csrc/punica/bgmv/bgmv_fp16_bf16_fp16.cu"
-  "csrc/punica/bgmv/bgmv_fp16_fp16_bf16.cu"
-  "csrc/punica/bgmv/bgmv_fp16_fp16_fp16.cu"
-  "csrc/punica/bgmv/bgmv_fp16_fp32_bf16.cu"
-  "csrc/punica/bgmv/bgmv_fp16_fp32_fp16.cu"
-  "csrc/punica/bgmv/bgmv_fp32_bf16_bf16.cu"
-  "csrc/punica/bgmv/bgmv_fp32_bf16_fp16.cu"
-  "csrc/punica/bgmv/bgmv_fp32_fp16_bf16.cu"
-  "csrc/punica/bgmv/bgmv_fp32_fp16_fp16.cu"
-  "csrc/punica/bgmv/bgmv_fp32_fp32_bf16.cu"
-  "csrc/punica/bgmv/bgmv_fp32_fp32_fp16.cu"
-  "csrc/punica/punica_ops.cc")
+# set(VLLM_PUNICA_EXT_SRC
+#   "csrc/punica/bgmv/bgmv_bf16_bf16_bf16.cu"
+#   "csrc/punica/bgmv/bgmv_bf16_bf16_fp16.cu"
+#   "csrc/punica/bgmv/bgmv_bf16_fp16_bf16.cu"
+#   "csrc/punica/bgmv/bgmv_bf16_fp16_fp16.cu"
+#   "csrc/punica/bgmv/bgmv_bf16_fp32_bf16.cu"
+#   "csrc/punica/bgmv/bgmv_bf16_fp32_fp16.cu"
+#   "csrc/punica/bgmv/bgmv_fp16_bf16_bf16.cu"
+#   "csrc/punica/bgmv/bgmv_fp16_bf16_fp16.cu"
+#   "csrc/punica/bgmv/bgmv_fp16_fp16_bf16.cu"
+#   "csrc/punica/bgmv/bgmv_fp16_fp16_fp16.cu"
+#   "csrc/punica/bgmv/bgmv_fp16_fp32_bf16.cu"
+#   "csrc/punica/bgmv/bgmv_fp16_fp32_fp16.cu"
+#   "csrc/punica/bgmv/bgmv_fp32_bf16_bf16.cu"
+#   "csrc/punica/bgmv/bgmv_fp32_bf16_fp16.cu"
+#   "csrc/punica/bgmv/bgmv_fp32_fp16_bf16.cu"
+#   "csrc/punica/bgmv/bgmv_fp32_fp16_fp16.cu"
+#   "csrc/punica/bgmv/bgmv_fp32_fp32_bf16.cu"
+#   "csrc/punica/bgmv/bgmv_fp32_fp32_fp16.cu"
+#   "csrc/punica/punica_ops.cc")
 
 #
 # Copy GPU compilation flags+update for punica
 #
-set(VLLM_PUNICA_GPU_FLAGS ${VLLM_GPU_FLAGS})
-list(REMOVE_ITEM VLLM_PUNICA_GPU_FLAGS
-  "-D__CUDA_NO_HALF_OPERATORS__"
-  "-D__CUDA_NO_HALF_CONVERSIONS__"
-  "-D__CUDA_NO_BFLOAT16_CONVERSIONS__"
-  "-D__CUDA_NO_HALF2_OPERATORS__")
+# set(VLLM_PUNICA_GPU_FLAGS ${VLLM_GPU_FLAGS})
+# list(REMOVE_ITEM VLLM_PUNICA_GPU_FLAGS
+#   "-D__CUDA_NO_HALF_OPERATORS__"
+#   "-D__CUDA_NO_HALF_CONVERSIONS__"
+#   "-D__CUDA_NO_BFLOAT16_CONVERSIONS__"
+#   "-D__CUDA_NO_HALF2_OPERATORS__")
 
 #
 # Filter out CUDA architectures < 8.0 for punica.
 #
-if (${VLLM_GPU_LANG} STREQUAL "CUDA")
-  set(VLLM_PUNICA_GPU_ARCHES)
-  foreach(ARCH ${VLLM_GPU_ARCHES})
-    string_to_ver(CODE_VER ${ARCH})
-    if (CODE_VER GREATER_EQUAL 8.0)
-      list(APPEND VLLM_PUNICA_GPU_ARCHES ${ARCH})
-    endif()
-  endforeach()
-  message(STATUS "Punica target arches: ${VLLM_PUNICA_GPU_ARCHES}")
-endif()
+# if (${VLLM_GPU_LANG} STREQUAL "CUDA")
+#   set(VLLM_PUNICA_GPU_ARCHES)
+#   foreach(ARCH ${VLLM_GPU_ARCHES})
+#     string_to_ver(CODE_VER ${ARCH})
+#     if (CODE_VER GREATER_EQUAL 8.0)
+#       list(APPEND VLLM_PUNICA_GPU_ARCHES ${ARCH})
+#     endif()
+#   endforeach()
+#   message(STATUS "Punica target arches: ${VLLM_PUNICA_GPU_ARCHES}")
+# endif()
 
-if (VLLM_PUNICA_GPU_ARCHES)
-  define_gpu_extension_target(
-    _punica_C
-    DESTINATION vllm
-    LANGUAGE ${VLLM_GPU_LANG}
-    SOURCES ${VLLM_PUNICA_EXT_SRC}
-    COMPILE_FLAGS ${VLLM_PUNICA_GPU_FLAGS}
-    ARCHITECTURES ${VLLM_PUNICA_GPU_ARCHES}
-    WITH_SOABI)
-else()
-  message(WARNING "Unable to create _punica_C target because none of the "
-    "requested architectures (${VLLM_GPU_ARCHES}) are supported, i.e. >= 8.0")
-endif()
+# if (VLLM_PUNICA_GPU_ARCHES)
+#   define_gpu_extension_target(
+#     _punica_C
+#     DESTINATION vllm
+#     LANGUAGE ${VLLM_GPU_LANG}
+#     SOURCES ${VLLM_PUNICA_EXT_SRC}
+#     COMPILE_FLAGS ${VLLM_PUNICA_GPU_FLAGS}
+#     ARCHITECTURES ${VLLM_PUNICA_GPU_ARCHES}
+#     WITH_SOABI)
+# else()
+#   message(WARNING "Unable to create _punica_C target because none of the "
+#     "requested architectures (${VLLM_GPU_ARCHES}) are supported, i.e. >= 8.0")
+# endif()
 
 #
 # Add the `default` target which detects which extensions should be
@@ -257,23 +257,23 @@ endif()
 # cmake -G Ninja -DVLLM_PYTHON_EXECUTABLE=`which python3` -DCMAKE_LIBRARY_OUTPUT_DIRECTORY=../vllm ..
 # cmake --build . --target default
 #
-add_custom_target(default)
+# add_custom_target(default)
 
-if(VLLM_GPU_LANG STREQUAL "CUDA" OR VLLM_GPU_LANG STREQUAL "HIP")
-  message(STATUS "Enabling C extension.")
-  add_dependencies(default _C)
-endif()
+# if(VLLM_GPU_LANG STREQUAL "CUDA" OR VLLM_GPU_LANG STREQUAL "HIP")
+#   message(STATUS "Enabling C extension.")
+#   add_dependencies(default _C)
+# endif()
 
-if(VLLM_GPU_LANG STREQUAL "CUDA")
-  message(STATUS "Enabling moe extension.")
-  add_dependencies(default _moe_C)
+# if(VLLM_GPU_LANG STREQUAL "CUDA")
+#   message(STATUS "Enabling moe extension.")
+#   add_dependencies(default _moe_C)
 
-  # Enable punica if -DVLLM_INSTALL_PUNICA_KERNELS=ON or
-  # VLLM_INSTALL_PUNICA_KERNELS is set in the environment and
-  # there are supported target arches.
-  if (VLLM_PUNICA_GPU_ARCHES AND
-      (ENV{VLLM_INSTALL_PUNICA_KERNELS} OR VLLM_INSTALL_PUNICA_KERNELS))
-    message(STATUS "Enabling punica extension.")
-    add_dependencies(default _punica_C)
-  endif()
-endif()
+#   # Enable punica if -DVLLM_INSTALL_PUNICA_KERNELS=ON or
+#   # VLLM_INSTALL_PUNICA_KERNELS is set in the environment and
+#   # there are supported target arches.
+#   if (VLLM_PUNICA_GPU_ARCHES AND
+#       (ENV{VLLM_INSTALL_PUNICA_KERNELS} OR VLLM_INSTALL_PUNICA_KERNELS))
+#     message(STATUS "Enabling punica extension.")
+#     add_dependencies(default _punica_C)
+#   endif()
+# endif()

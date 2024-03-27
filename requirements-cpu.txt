@@ -1,0 +1,7 @@
+# Should be mirrored in pyproject.toml
+numpy
+ninja
+packaging
+setuptools>=49.4.0
+torch==2.1.2+cpu
+wheel
