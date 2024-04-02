@@ -166,7 +166,7 @@ class SchedulerNs:
         # now = time.time()
 
         # Join waiting sequences if possible.
-        if not self.swapped:
+        if not self.swapped: # ====NS no swap at all, but keep code structure for now
             ignored_seq_groups: List[SequenceGroup] = []
             scheduled: List[SequenceGroup] = []
             # The total number of sequences on the fly, including the

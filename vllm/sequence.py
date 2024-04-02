@@ -534,14 +534,16 @@ class SamplerOutput:
 
     outputs: List[SequenceGroupOutput]
 
+    # ====NS deletes
     # On-device tensor containing probabilities of each token.
-    sampled_token_probs: Optional["torch.Tensor"] = None
+    # sampled_token_probs: Optional["torch.Tensor"] = None
 
+    # ====NS deletes
     # On-device tensor containing the sampled token ids.
-    sampled_token_ids: Optional["torch.Tensor"] = None
+    # sampled_token_ids: Optional["torch.Tensor"] = None
 
     # Spec decode metrics populated by workers.
-    spec_decode_worker_metrics: Optional["SpecDecodeWorkerMetrics"] = None
+    # spec_decode_worker_metrics: Optional["SpecDecodeWorkerMetrics"] = None
 
     def __getitem__(self, idx: int):
         return self.outputs[idx]
