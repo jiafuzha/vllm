@@ -2,6 +2,8 @@ import contextlib
 import time
 from typing import Dict, List, Optional, Tuple, Set, Union
 
+import ctypes
+
 from vllm.config import (DeviceConfig, ModelConfig, LoRAConfig, ParallelConfig,
                          SchedulerConfig)
 from vllm.logger import init_logger
@@ -11,6 +13,9 @@ from vllm.sequence import SamplerOutput, SequenceData, SequenceGroupMetadata
 from vllm.lora.worker_manager import LRUCacheWorkerLoRAManager
 from vllm.lora.layers import LoRAMapping
 from vllm.lora.request import LoRARequest
+
+from ns_structures import Generation
+
 
 logger = init_logger(__name__)
 
@@ -97,6 +102,7 @@ class ModelRunner:
         #         self.lora_config, self.device, self.model.embedding_modules,
         #         self.model.embedding_padding_modules)
         #     self.model = self.lora_manager.create_lora_manager(self.model)
+
         self.model.load_model()
         
 
@@ -541,7 +547,7 @@ class ModelRunner:
         self,
         seq_group_metadata_list: Optional[List[SequenceGroupMetadata]],
         kv_caches: List[Tuple[any, any]],
-    ) -> Optional[SamplerOutput]:
+    ) -> Optional[List[int]]:
         # ====NS changes to convert sequences to native queries, keep method name for later refactoring though there are no tensors
         # (input_tokens, input_positions, input_metadata, sampling_metadata,
         #  lora_requests,
@@ -551,11 +557,14 @@ class ModelRunner:
         # if self.lora_config:
         #     self.set_active_loras(lora_requests, lora_mapping)
 
-        # ====NS execute model
-        # ====NS and provide callbacks for update sequence states
-
-        def generation_callback(id_to_next_tokens):
-            pass
+        # ====NS set generation
+        for seq_group_metadata in seq_group_metadata_list:
+            g_ptr = self.model.get_free_generation_slot_address(id)
+            g = ctypes.cast(g_ptr, ctypes.POINTER(Generation))[0]
+            g.query_id = seq_group_metadata.request_id
+            
+        # ====NS execute model, output will be processed in llm_engine.py
+        return self.model()
 
         # self.model.batch_generate(queries, generation_callback)
         # # Execute the model.

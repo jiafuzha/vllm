@@ -638,6 +638,15 @@ class LLMEngine:
         else:
             output = []
 
+        if (output) {
+            model = self.model_executor.driver_worker.model
+            gs_ptr = model.get_generations_address()
+            generations = ctypes.cast(gs_ptr, ctypes.POINTER(Generation))
+            # copy generated tokens, update vllm sequence, update generation status to consumed
+            self._process_model_outputs(output, scheduler_outputs)
+        }
+
+
         return self._process_model_outputs(output, scheduler_outputs)
 
     def do_log_stats(self) -> None:
