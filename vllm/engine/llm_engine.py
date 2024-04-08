@@ -1,6 +1,8 @@
 import time
 from typing import Dict, Iterable, List, Optional, Tuple, Type, Union
 
+import ctypes
+
 from transformers import PreTrainedTokenizer
 
 import vllm
@@ -21,6 +23,8 @@ from vllm.transformers_utils.tokenizer import detokenize_incrementally
 from vllm.transformers_utils.tokenizer_group import (BaseTokenizerGroup,
                                                      get_tokenizer_group)
 from vllm.utils import Counter
+
+from ns_structures import Generation
 
 logger = init_logger(__name__)
 _LOCAL_LOGGING_INTERVAL_SEC = 5
@@ -576,6 +580,8 @@ class LLMEngine:
             self.stat_logger.log(self._get_stats(scheduler_outputs))
 
         return request_outputs
+    
+    def _find_seq_group_metadata(self, seq_group: SequenceGroup) -> SequenceGroupMetadata:
 
     def step(self) -> List[RequestOutput]:
         """Performs one decoding iteration and returns newly generated results.
@@ -638,16 +644,21 @@ class LLMEngine:
         else:
             output = []
 
-        if (output) {
+        # output is list of generation id
+        if output: # build output for vllm processing
             model = self.model_executor.driver_worker.model
             gs_ptr = model.get_generations_address()
             generations = ctypes.cast(gs_ptr, ctypes.POINTER(Generation))
             # copy generated tokens, update vllm sequence, update generation status to consumed
-            self._process_model_outputs(output, scheduler_outputs)
-        }
+            for gen_id in output:
+                gen = generations[gen_id]
+                gen.status = 4 # consumed
+                for i in range(gen.n_generated_tokens):
+                    seq_group_metadata_list gen.generated_ids
 
 
-        return self._process_model_outputs(output, scheduler_outputs)
+
+        return self._process_model_outputs([], scheduler_outputs)
 
     def do_log_stats(self) -> None:
         """Forced log when no requests active."""

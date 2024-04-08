@@ -559,9 +559,17 @@ class ModelRunner:
 
         # ====NS set generation
         for seq_group_metadata in seq_group_metadata_list:
-            g_ptr = self.model.get_free_generation_slot_address(id)
-            g = ctypes.cast(g_ptr, ctypes.POINTER(Generation))[0]
-            g.query_id = seq_group_metadata.request_id
+            if seq_group_metadata.is_prompt: # issue new generation request only, existing generations are managed in native for now.
+                query_id = int(seq_group_metadata.request_id)
+                g_ptr = self.model.get_free_generation_slot_address(query_id)
+                g = ctypes.cast(g_ptr, ctypes.POINTER(Generation))[0]
+                g.query_id = query_id
+                p_tokens = seq_group_metadata.seq_data[query_id].prompt_token_ids
+                n_prompt_tokens = len(p_tokens)
+                g.n_prompt_tokens = n_prompt_tokens
+                prompt_tokens_c_arr = (ctypes.c_int32 * n_prompt_tokens)(*p_tokens)
+                ctypes.memmove(g.prompt_ids, prompt_tokens_c_arr, n_prompt_tokens*ctypes.sizeof(ctypes.c_int32))
+            
             
         # ====NS execute model, output will be processed in llm_engine.py
         return self.model()
