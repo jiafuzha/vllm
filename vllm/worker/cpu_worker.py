@@ -99,7 +99,8 @@ class Worker:
         
         # ====NS changes to use neural-speed, initialize and quantize model if it's not been quantized
         from neural_speed import ModelForContBatching
-        model = ModelForContBatching(ctx_size=self.model_config.max_model_len, n_batch=self.scheduler_config.max_num_seqs)
+        # model = ModelForContBatching(ctx_size=self.model_config.max_model_len, n_batch=self.scheduler_config.max_num_seqs)
+        model = ModelForContBatching(ctx_size=self.model_config.max_model_len, n_batch=self.scheduler_config.max_num_seqs, max_request_num=10, batch_size=10)
         model.init(
             self.model_config.model,
             weight_dtype="int4",

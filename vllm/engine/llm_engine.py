@@ -1,8 +1,6 @@
 import time
 from typing import Dict, Iterable, List, Optional, Tuple, Type, Union
 
-import ctypes
-
 from transformers import PreTrainedTokenizer
 
 import vllm
@@ -17,14 +15,13 @@ from vllm.engine.ray_utils import initialize_ray_cluster
 from vllm.logger import init_logger
 from vllm.outputs import RequestOutput
 from vllm.sampling_params import SamplingParams
-from vllm.sequence import (Logprob, SamplerOutput, Sequence, SequenceGroup,
+from vllm.sequence import (Logprob, SamplerOutput, FinalSequenceOutputs, Sequence, SequenceGroup,
                            SequenceGroupOutput, SequenceOutput, SequenceStatus)
-from vllm.transformers_utils.tokenizer import detokenize_incrementally
+# from vllm.transformers_utils.tokenizer import detokenize_incrementally
+from vllm.transformers_utils.tokenizer import detokenize_output_tokens
 from vllm.transformers_utils.tokenizer_group import (BaseTokenizerGroup,
                                                      get_tokenizer_group)
 from vllm.utils import Counter
-
-from ns_structures import Generation
 
 logger = init_logger(__name__)
 _LOCAL_LOGGING_INTERVAL_SEC = 5
@@ -68,6 +65,7 @@ class LLMEngine:
         lora_config: Optional[LoRAConfig],
         executor_class: Type[ExecutorBase],
         log_stats: bool,
+        streaming: bool = False
     ) -> None:
         logger.info(
             f"Initializing an LLM engine (v{vllm.__version__}) with config: "
@@ -117,6 +115,8 @@ class LLMEngine:
         # ====NS changes it to SchedulerNs
         # self.scheduler = Scheduler(scheduler_config, cache_config, lora_config)
         self.scheduler = SchedulerNs(scheduler_config, cache_config, lora_config)
+
+        self.streaming = streaming
 
         # Metric Logging.
         if self.log_stats:
@@ -370,7 +370,6 @@ class LLMEngine:
 
     def _process_sequence_group_outputs(self, seq_group: SequenceGroup,
                                         outputs: SequenceGroupOutput) -> None:
-
         # Process prompt logprobs
         prompt_logprobs = outputs.prompt_logprobs
         if prompt_logprobs is not None:
@@ -398,7 +397,8 @@ class LLMEngine:
 
         # Process the child samples for each parent sequence
         for parent in parent_seqs:
-            child_samples: List[SequenceOutput] = parent_child_dict[
+            # ====NS changed to support FinalSequenceOutputs
+            child_samples: List[Union[SequenceOutput, FinalSequenceOutputs]] = parent_child_dict[
                 parent.seq_id]
             if len(child_samples) == 0:
                 # This parent sequence has no children samples. Remove
@@ -419,16 +419,22 @@ class LLMEngine:
             # We reuse the parent sequence here to reduce redundant memory
             # copies, especially when using non-beam search sampling methods.
             last_child_sample = child_samples[-1]
-            parent.append_token_id(last_child_sample.output_token,
+            # ====NS changed to support non-streaming case
+            if isinstance(last_child_sample, SequenceOutput):
+                parent.append_token_id(last_child_sample.output_token,
                                    last_child_sample.logprobs)
+            elif last_child_sample.output_tokens: # ====NS do nothing when there is no output token
+                parent.append_token_ids(last_child_sample.output_tokens, last_child_sample.logprobs if last_child_sample.logprobs is not None else {})
+                parent.status = SequenceStatus.FINISHED_STOPPED
             child_seqs.append((parent, parent))
 
         for seq, _ in child_seqs:
             self._decode_sequence(seq, seq_group.sampling_params)
             self._check_stop(seq, seq_group.sampling_params)
 
+        # ====NS changed to support non-streaming case
         # Non-beam search case
-        if not seq_group.sampling_params.use_beam_search:
+        if (not seq_group.sampling_params.use_beam_search) or (not self.streaming):
             # For newly created child sequences, add them to the sequence group
             # and fork them in block manager if they are not finished.
             for seq, parent in child_seqs:
@@ -580,8 +586,6 @@ class LLMEngine:
             self.stat_logger.log(self._get_stats(scheduler_outputs))
 
         return request_outputs
-    
-    def _find_seq_group_metadata(self, seq_group: SequenceGroup) -> SequenceGroupMetadata:
 
     def step(self) -> List[RequestOutput]:
         """Performs one decoding iteration and returns newly generated results.
@@ -644,21 +648,7 @@ class LLMEngine:
         else:
             output = []
 
-        # output is list of generation id
-        if output: # build output for vllm processing
-            model = self.model_executor.driver_worker.model
-            gs_ptr = model.get_generations_address()
-            generations = ctypes.cast(gs_ptr, ctypes.POINTER(Generation))
-            # copy generated tokens, update vllm sequence, update generation status to consumed
-            for gen_id in output:
-                gen = generations[gen_id]
-                gen.status = 4 # consumed
-                for i in range(gen.n_generated_tokens):
-                    seq_group_metadata_list gen.generated_ids
-
-
-
-        return self._process_model_outputs([], scheduler_outputs)
+        return self._process_model_outputs(output, scheduler_outputs)
 
     def do_log_stats(self) -> None:
         """Forced log when no requests active."""
@@ -759,20 +749,34 @@ class LLMEngine:
 
     def _decode_sequence(self, seq: Sequence, prms: SamplingParams) -> None:
         """Decodes the new token for a sequence."""
-        all_input_ids = seq.get_token_ids()
+        # ====NS changes to get output tokens only
+        # all_input_ids = seq.get_token_ids()
+        output_token_ids = seq.get_output_token_ids()
         self._decode_logprobs(seq, prms, seq.output_logprobs[-1],
-                              all_input_ids)
+                              output_token_ids)
 
+        # (new_tokens, new_output_text, prefix_offset,
+        #  read_offset) = detokenize_incrementally(
+        #      self.get_tokenizer_for_seq(seq),
+        #      all_input_ids=output_token_ids,
+        #      prev_tokens=seq.tokens,
+        #      prefix_offset=seq.prefix_offset,
+        #      read_offset=seq.read_offset,
+        #      skip_special_tokens=prms.skip_special_tokens,
+        #      spaces_between_special_tokens=prms.spaces_between_special_tokens,
+        #  )
+        # ====NS decode all output tokens
         (new_tokens, new_output_text, prefix_offset,
-         read_offset) = detokenize_incrementally(
+         read_offset) = detokenize_output_tokens(
              self.get_tokenizer_for_seq(seq),
-             all_input_ids=all_input_ids,
+             all_input_ids=output_token_ids,
              prev_tokens=seq.tokens,
              prefix_offset=seq.prefix_offset,
              read_offset=seq.read_offset,
              skip_special_tokens=prms.skip_special_tokens,
              spaces_between_special_tokens=prms.spaces_between_special_tokens,
          )
+
         if seq.tokens is None:
             seq.tokens = new_tokens
         else:

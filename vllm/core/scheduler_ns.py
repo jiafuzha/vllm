@@ -419,7 +419,9 @@ class SchedulerNs:
         self.block_manager.fork(parent_seq, child_seq)
 
     def free_seq(self, seq: Sequence) -> None:
-        self.block_manager.free(seq)
+        # ====NS changes, no block_manager
+        # self.block_manager.free(seq)
+        pass
 
     def free_finished_seq_groups(self) -> None:
         self.running = deque(seq_group for seq_group in self.running
