@@ -329,11 +329,19 @@ class AsyncLLMEngine:
             initialize_ray_cluster(parallel_config)
             from vllm.executor.ray_gpu_executor import RayGPUExecutorAsync
             executor_class = RayGPUExecutorAsync
-        else:
+        elif engine_args.device.lower() == "cuda":
             assert parallel_config.world_size == 1, (
                 "Ray is required if parallel_config.world_size > 1.")
             from vllm.executor.gpu_executor import GPUExecutorAsync
             executor_class = GPUExecutorAsync
+        # ====NS changes to add CPUExecutor for 'neuralspeed' quantization    
+        else:
+            assert parallel_config.world_size == 1, (
+                "Ray is required if parallel_config.world_size > 1.")
+            assert engine_args.quantization == "neuralspeed", (
+                "quantization should be neuralspeed if device is CPU.")
+            from vllm.executor.cpu_executor import CPUExecutorAsync
+            executor_class = CPUExecutorAsync
         # Create the async LLM engine.
         engine = cls(parallel_config.worker_use_ray,
                      engine_args.engine_use_ray,
