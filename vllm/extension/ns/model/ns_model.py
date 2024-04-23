@@ -23,6 +23,10 @@ class NSModel(nn.Module):
 
     def forward(self, x):
         return self.fc(x)
+
+    def load_weights(self, weights):
+        assert sum(weights) > 0
+        pass
     
 class NSLLamaModel(NSModel):
     def __init__(self, config: LlamaConfig,
