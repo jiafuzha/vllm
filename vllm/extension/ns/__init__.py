@@ -17,11 +17,11 @@ def _verify_quntization(self):
 vllm_config.ModelConfig._verify_quantization = _verify_quntization
 
 ## add new loadformat ns
-FORMAT_DICT = {e.name : e.value for e in vllm_config.LoadFormat}
-FORMAT_DICT.update({"NS": "ns"})
-LF = enum.Enum("LoadFormat", FORMAT_DICT)
+# FORMAT_DICT = {e.name : e.value for e in vllm_config.LoadFormat}
+# FORMAT_DICT.update({"NS": "ns"})
+# LF = enum.Enum("LoadFormat", FORMAT_DICT)
 
-vllm_config.LoadFormat = LF
+# vllm_config.LoadFormat = LF
 
 # register ns quant config, 
 # TODO add quant_ns_config.json under huggingface cache folder like below,

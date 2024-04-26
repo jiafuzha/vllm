@@ -19,6 +19,7 @@ class NSModel(nn.Module):
         self.linear_method = linear_method
         self.lora_config = lora_config
         # TODO: determine pad token
+        config.pad_token_id
         self.ie_model = IE_Model(config.name_or_path, max_batch_size=10)
 
         self.sampler = Sampler()
@@ -27,7 +28,7 @@ class NSModel(nn.Module):
         return self.fc(x)
 
     def load_weights(self, weights):
-        assert sum(weights) > 0
+        assert sum(1 for _ in weights) > 0
         
         qc = self.linear_method.quant_config
         self.ie_model.check_and_quantize(weight_dtype=qc.weight_dtype,
@@ -36,7 +37,7 @@ class NSModel(nn.Module):
                                          scale_dtype=qc.scale_dtype,
                                          compute_dtype=qc.compute_dtype,
                                         )
-        self.ie_model.load_weights()
+        self.ie_model.load_model()
 
     
 class NSLLamaModel(NSModel):
