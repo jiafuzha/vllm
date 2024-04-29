@@ -127,6 +127,8 @@ class NSModelLoader(vllm_loader.BaseModelLoader):
             with torch.device(device_config.device):
                 model = vllm_loader._initialize_model(model_config, self.load_config,
                                           lora_config, vision_language_config)
+            # initialize native inference engine
+            model.init_inference_engine(model_config, parallel_config, scheduler_config)
             model.load_weights(
                 self._get_weights_iterator(model_config.model,
                                            model_config.revision,

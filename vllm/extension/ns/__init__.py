@@ -1,9 +1,13 @@
 # extension for integrate with neural-speed
-import enum
 import importlib
 from typing import Optional
+import os
 
 from vllm.model_executor.model_loader.weight_utils import get_quant_config
+
+from vllm.logger import init_logger
+
+logger = init_logger(__name__)
 
 # allow ns quantization
 vllm_config = importlib.import_module('vllm.config')
@@ -11,6 +15,7 @@ old_verify_quantization = vllm_config.ModelConfig._verify_quantization
 
 def _verify_quntization(self):
     if self.quantization is not None and self.quantization == "ns":
+        os.environ["NS_QUANTIZATION"] = "1"
         return
     return old_verify_quantization(self)
 
@@ -42,16 +47,19 @@ from vllm.extension.ns.quantization.cpu_ns_config import NSQuantConfig
 
 quant._QUANTIZATION_CONFIG_REGISTRY["ns"] = NSQuantConfig
 
+logger.info("__ns extension: add ns quantization config, %s", NSQuantConfig.__name__)
+
 # use ns model loader for ns
 vllm_loader = importlib.import_module('vllm.model_executor.model_loader.loader')
+old_get_model_loader = vllm_loader.get_model_loader
 
 from vllm.extension.ns.model.ns_loader import NSModelLoader
 from vllm.config import LoadConfig
 
 def get_model_loader_ns(load_config: LoadConfig) -> vllm_loader.BaseModelLoader:
-    if load_config.load_format == "ns":
+    if os.environ["NS_QUANTIZATION"] == "1":
         return NSModelLoader(load_config)
-    return vllm_loader.DefaultModelLoader(load_config)
+    return old_get_model_loader(load_config)
 
 vllm_loader.get_model_loader = get_model_loader_ns
 
@@ -66,9 +74,33 @@ def _get_linear_method_ns(model_config: vllm_config.ModelConfig,
 
 vllm_loader._get_linear_method = _get_linear_method_ns
 
+# reload to make above changes take effect
+model_loader = importlib.import_module('vllm.model_executor.model_loader')
+importlib.reload(model_loader)
+
+logger.info("__ns extension: use ns model loader for ns model, %s", NSModelLoader.__name__)
+
 # register ns model
 from vllm.model_executor.models import ModelRegistry
 from vllm.extension.ns.model.ns_model import NSLLamaModel
 
 ModelRegistry.register_model("LlamaForCausalLM", NSLLamaModel)
+
+logger.info("__ns extension: register ns model, %s", NSLLamaModel.__name__)
+
+# use our CPUCacheEngine for ns
+cpu_worker = importlib.import_module('vllm.worker.cpu_worker')
+
+from vllm.extension.ns.kv_cache.ns_cache import NSCPUCacheEngine
+cpu_worker.CPUCacheEngine = NSCPUCacheEngine
+
+def get_cache_block_size_bytes(self) -> int:
+    """Return the size in bytes of a single KV cache block.
+    """
+    return NSCPUCacheEngine.get_cache_block_size(self.cache_config, self.model_config, self.parallel_config, self.scheduler_config)
+
+cpu_worker.CPUWorker.get_cache_block_size_bytes = get_cache_block_size_bytes
+
+logger.info("__ns extension: use ns cache engine for ns, %s", NSCPUCacheEngine.__name__)
+
 
