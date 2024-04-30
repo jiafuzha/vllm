@@ -40,15 +40,18 @@ class NSCPUCacheEngine:
         # in the scheduler.
         self.num_cpu_blocks = cache_config.num_gpu_blocks
 
-        if cache_config.cache_dtype == "auto":
-            self.dtype = model_config.dtype
-        else:
-            self.dtype = STR_DTYPE_TO_TORCH_DTYPE[cache_config.cache_dtype]
+        # if cache_config.cache_dtype == "auto":
+        #     self.dtype = model_config.dtype
+        # else:
+        #     self.dtype = STR_DTYPE_TO_TORCH_DTYPE[cache_config.cache_dtype]
+        # int32 should be enough to hold slot_id
+        self.dtype = torch.int32
 
         # Get attention backend.
         # self.attn_backend = get_attn_backend(model_config.dtype)
 
         # Initialize the cache.
+        # Note: fake kv cache here. We only store native KV cache slot_id here
         self.cpu_cache = self._allocate_kv_cache(self.num_cpu_blocks)
 
     def _allocate_kv_cache(
@@ -56,12 +59,16 @@ class NSCPUCacheEngine:
         num_blocks: int,
     ) -> List[torch.Tensor]:
         """Allocates KV cache on CPU."""
-        kv_cache_shape = self.attn_backend.get_kv_cache_shape(
-            num_blocks, self.block_size, self.num_heads, self.head_size)
+        # kv_cache_shape = self.attn_backend.get_kv_cache_shape(
+        #     num_blocks, self.block_size, self.num_heads, self.head_size)
+
+        # single tensor would be enough to store the slot_id of sequence
+        kv_cache_shape = (num_blocks, self.block_size)
         kv_cache: List[torch.Tensor] = []
-        for _ in range(self.num_layers):
-            kv_cache.append(
-                torch.empty(kv_cache_shape, dtype=self.dtype, device="cpu"))
+        # for _ in range(self.num_layers):
+        kv_cache.append(
+            torch.empty(kv_cache_shape, dtype=self.dtype, device="cpu"))
+
         return kv_cache
 
     def swap_in(self, src_to_dst: Dict[int, int]) -> None:

@@ -13,6 +13,7 @@ from vllm.attention import AttentionMetadata
 
 from inference_engine import Model as IE_Model
 
+
 class NSModel(nn.Module):
     def __init__(self, config: PretrainedConfig,
                    linear_method: Optional[LinearMethodBase],
@@ -31,11 +32,19 @@ class NSModel(nn.Module):
                 positions: torch.Tensor,
                 kv_caches: List[torch.Tensor],
                 attn_metadata: AttentionMetadata):
-        
-        return self.ie_model(input_ids, positions, kv_caches, attn_metadata)
+        assert len(kv_caches) == 1, "kv_caches should have 1 element here"
+        # use data_ptr to avoid inference engine model depends on pytorch and vllm types
+        return self.ie_model(input_ids.data_ptr, str(input_ids.dtype),
+                             positions.data_ptr(), str(positions.dtype),
+                             kv_caches[0].data_ptr(), # kv cache type is fixed, int32
+                             attn_metadata.is_prompt,
+                             attn_metadata.block_tables.data_ptr(), str(attn_metadata.block_tables.dtype),
+                             attn_metadata.slot_mapping.data_ptr(), str(attn_metadata.slot_mapping.dtype),
+                             attn_metadata.prompt_lens
+                             )
     
     def init_inference_engine(self, model_config: ModelConfig, parallel_config: ParallelConfig, scheduler_config: SchedulerConfig):
-        self.ie_model = IE_Model(self.config.name_or_path, max_batch_size=scheduler_config.max_num_seqs)
+        self.ie_model = IE_Model(self.config.name_or_path, max_batch_size=scheduler_config.max_num_seqs, ctx_size=model_config.max_model_len, max_new_tokens=model_config.max_model_len)
         self.tokenizer = self.ie_model.tokenizer
 
     def load_weights(self, weights):
