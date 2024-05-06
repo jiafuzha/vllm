@@ -62,8 +62,8 @@ class NSCPUCacheEngine:
         # kv_cache_shape = self.attn_backend.get_kv_cache_shape(
         #     num_blocks, self.block_size, self.num_heads, self.head_size)
 
-        # single tensor would be enough to store the slot_id of sequence
-        kv_cache_shape = (num_blocks, self.block_size)
+        # single tensor would be enough to store the sequence id/slot_id
+        kv_cache_shape = (num_blocks, self.block_size, 2)
         kv_cache: List[torch.Tensor] = []
         # for _ in range(self.num_layers):
         kv_cache.append(

@@ -103,4 +103,12 @@ cpu_worker.CPUWorker.get_cache_block_size_bytes = get_cache_block_size_bytes
 
 logger.info("__ns extension: use ns cache engine for ns, %s", NSCPUCacheEngine.__name__)
 
+# use our execute_model method to do some conversion and pass more parameters
+cpu_model_runner = importlib.import_module('vllm.worker.cpu_model_runner')
+
+from vllm.extension.ns.model.ns_model import execute_model
+cpu_model_runner.CPUModelRunner.execute_model = execute_model
+
+logger.info("__ns extension: replace execute_model in cpu_model_runner, %s", execute_model.__name__)
+
 

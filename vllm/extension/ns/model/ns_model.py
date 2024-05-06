@@ -13,6 +13,8 @@ from vllm.attention import AttentionMetadata
 
 from inference_engine import Model as IE_Model
 
+from vllm.sequence import SamplerOutput, SequenceGroupMetadata
+
 
 class NSModel(nn.Module):
     def __init__(self, config: PretrainedConfig,
@@ -31,16 +33,18 @@ class NSModel(nn.Module):
                 input_ids: torch.Tensor,
                 positions: torch.Tensor,
                 kv_caches: List[torch.Tensor],
-                attn_metadata: AttentionMetadata):
+                attn_metadata: AttentionMetadata,
+                seq_ids: List[int] = None):
         assert len(kv_caches) == 1, "kv_caches should have 1 element here"
-        # use data_ptr to avoid inference engine model depends on pytorch and vllm types
-        return self.ie_model(input_ids.data_ptr, str(input_ids.dtype),
-                             positions.data_ptr(), str(positions.dtype),
+        # use data_ptr and torch type in str to avoid inference engine model depends on pytorch and vllm types
+        return self.ie_model(input_ids.data_ptr(),
+                             positions.data_ptr(),
                              kv_caches[0].data_ptr(), # kv cache type is fixed, int32
                              attn_metadata.is_prompt,
-                             attn_metadata.block_tables.data_ptr(), str(attn_metadata.block_tables.dtype),
-                             attn_metadata.slot_mapping.data_ptr(), str(attn_metadata.slot_mapping.dtype),
-                             attn_metadata.prompt_lens
+                             attn_metadata.block_tables.data_ptr(),
+                             attn_metadata.slot_mapping.data_ptr(),
+                             attn_metadata.prompt_lens,
+                             seq_ids
                              )
     
     def init_inference_engine(self, model_config: ModelConfig, parallel_config: ParallelConfig, scheduler_config: SchedulerConfig):
@@ -65,3 +69,38 @@ class NSLLamaModel(NSModel):
                    linear_method: Optional[LinearMethodBase],
                    lora_config: Optional[LoRAConfig] = None):
         super().__init__(config, linear_method, lora_config)
+
+
+# modified execute_model in cpu_model_runner.py to pass sequence_id and convert tensor to int32 for now
+def execute_model(
+        self,
+        seq_group_metadata_list: List[SequenceGroupMetadata],
+        kv_caches: List[torch.Tensor],
+    ) -> Optional[SamplerOutput]:
+        (input_tokens, input_positions, attn_metadata, sampling_metadata
+         ) = self.prepare_input_tensors(seq_group_metadata_list)
+
+        model_executable = self.model
+        execute_model_kwargs = {
+            "input_ids": input_tokens.to(torch.int32),
+            "positions": input_positions,
+            "kv_caches": kv_caches,
+            "attn_metadata": attn_metadata,
+            "seq_ids": sampling_metadata.seq_data.keys()
+        }
+
+        hidden_states = model_executable(**execute_model_kwargs)
+
+        # Compute the logits.
+        logits = self.model.compute_logits(hidden_states, sampling_metadata)
+
+        # Only perform sampling in the driver worker.
+        if not sampling_metadata.perform_sampling:
+            return None
+
+        # Sample the next token.
+        output = self.model.sample(
+            logits=logits,
+            sampling_metadata=sampling_metadata,
+        )
+        return output
