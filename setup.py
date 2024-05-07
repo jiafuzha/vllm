@@ -12,13 +12,15 @@ from shutil import which
 import torch
 #from torch.utils.cpp_extension import CUDA_HOME
 
+CUDA_HOME = "./"
+
 ROOT_DIR = os.path.dirname(__file__)
 
 # vLLM only supports Linux platform
 assert sys.platform.startswith(
     "linux"), "vLLM only supports Linux platform (including WSL)."
 
-#MAIN_CUDA_VERSION = "12.1"
+MAIN_CUDA_VERSION = "12.1"
 
 
 def is_sccache_available() -> bool:
@@ -170,7 +172,7 @@ class cmake_build_ext(build_ext):
 
 
 def _is_cuda() -> bool:
-    return torch.version.cuda is not None
+    return False
 
 
 def _is_hip() -> bool:
