@@ -110,6 +110,11 @@ class SequenceData:
         self.output_token_ids.append(token_id)
         self.cumulative_logprob += logprob
 
+    # ====NS append token ids
+    def append_token_ids(self, token_ids: List[int], logprobs: List[float]) -> None:
+        self.output_token_ids.extend(token_ids)
+        self.cumulative_logprob += sum(logprobs)
+
     def get_len(self) -> int:
         return len(self.output_token_ids) + len(self.prompt_token_ids)
 
@@ -229,6 +234,17 @@ class Sequence:
         self._append_tokens_to_blocks([token_id])
         self.output_logprobs.append(logprobs)
         self.data.append_token_id(token_id, logprobs[token_id].logprob)
+
+    # ====NS append token ids
+    def append_token_ids(
+        self,
+        token_ids: List[int],
+        logprobs: Dict[int, Logprob],
+    ) -> None:
+        # assert token_id in logprobs
+        # self._append_tokens_to_blocks([token_id])
+        self.output_logprobs.append(logprobs)
+        self.data.append_token_ids(token_ids, logprobs.values())
 
     def get_len(self) -> int:
         return self.data.get_len()
@@ -499,6 +515,41 @@ class SequenceOutput:
                  and self.output_token == other.output_token)
         log_probs_equal = other.logprobs == self.logprobs
         return equal and log_probs_equal
+    
+# ====NS added class to hold all output tokens and logprobs
+class FinalSequenceOutputs:
+    """The model output associated with a sequence.
+
+    Args:
+        parent_seq_id: The ID of the parent sequence (for forking in beam
+            search).
+        output_tokens: list of the output token IDs
+        logprobs: The logprobs of the output token.
+            (Token id -> logP(x_i+1 | x_0, ..., x_i))
+    """
+
+    def __init__(
+        self,
+        parent_seq_id: int,
+        output_tokens: List[int],
+        logprobs: Dict[int, Logprob],
+    ) -> None:
+        self.parent_seq_id = parent_seq_id
+        self.output_tokens = output_tokens
+        self.logprobs = logprobs
+
+    def __repr__(self) -> str:
+        return (f"FinalSequenceOutputs(parent_seq_id={self.parent_seq_id}, "
+                f"output_tokens={self.output_tokens}, "
+                f"logprobs={self.logprobs})")
+
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, SequenceOutput):
+            raise NotImplementedError()
+        equal = (self.parent_seq_id == other.parent_seq_id
+                 and self.output_tokens == other.output_tokens)
+        log_probs_equal = other.logprobs == self.logprobs
+        return equal and log_probs_equal
 
 
 class SequenceGroupOutput:
@@ -506,7 +557,7 @@ class SequenceGroupOutput:
 
     def __init__(
         self,
-        samples: List[SequenceOutput],
+        samples: List[Union[SequenceOutput, FinalSequenceOutputs]], # ====NS changed to hold FinalSequenceOutputs
         prompt_logprobs: Optional[PromptLogprobs],
     ) -> None:
         self.samples = samples
@@ -534,14 +585,16 @@ class SamplerOutput:
 
     outputs: List[SequenceGroupOutput]
 
+    # ====NS deletes
     # On-device tensor containing probabilities of each token.
-    sampled_token_probs: Optional["torch.Tensor"] = None
+    # sampled_token_probs: Optional["torch.Tensor"] = None
 
+    # ====NS deletes
     # On-device tensor containing the sampled token ids.
-    sampled_token_ids: Optional["torch.Tensor"] = None
+    # sampled_token_ids: Optional["torch.Tensor"] = None
 
     # Spec decode metrics populated by workers.
-    spec_decode_worker_metrics: Optional["SpecDecodeWorkerMetrics"] = None
+    # spec_decode_worker_metrics: Optional["SpecDecodeWorkerMetrics"] = None
 
     def __getitem__(self, idx: int):
         return self.outputs[idx]

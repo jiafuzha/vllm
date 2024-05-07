@@ -7,7 +7,7 @@ import vllm
 from vllm.lora.request import LoRARequest
 from vllm.config import (CacheConfig, DeviceConfig, ModelConfig,
                          ParallelConfig, SchedulerConfig, LoRAConfig)
-from vllm.core.scheduler import Scheduler, SchedulerOutputs
+from vllm.core.scheduler_ns import SchedulerNs, SchedulerOutputsNs
 from vllm.engine.arg_utils import EngineArgs
 from vllm.executor.executor_base import ExecutorBase
 from vllm.engine.metrics import StatLogger, Stats
@@ -15,9 +15,10 @@ from vllm.engine.ray_utils import initialize_ray_cluster
 from vllm.logger import init_logger
 from vllm.outputs import RequestOutput
 from vllm.sampling_params import SamplingParams
-from vllm.sequence import (Logprob, SamplerOutput, Sequence, SequenceGroup,
+from vllm.sequence import (Logprob, SamplerOutput, FinalSequenceOutputs, Sequence, SequenceGroup,
                            SequenceGroupOutput, SequenceOutput, SequenceStatus)
-from vllm.transformers_utils.tokenizer import detokenize_incrementally
+# from vllm.transformers_utils.tokenizer import detokenize_incrementally
+from vllm.transformers_utils.tokenizer import detokenize_output_tokens
 from vllm.transformers_utils.tokenizer_group import (BaseTokenizerGroup,
                                                      get_tokenizer_group)
 from vllm.utils import Counter
@@ -64,6 +65,7 @@ class LLMEngine:
         lora_config: Optional[LoRAConfig],
         executor_class: Type[ExecutorBase],
         log_stats: bool,
+        streaming: bool = False
     ) -> None:
         logger.info(
             f"Initializing an LLM engine (v{vllm.__version__}) with config: "
@@ -110,7 +112,11 @@ class LLMEngine:
         # Create the scheduler.
         # NOTE: the cache_config here have been updated with the numbers of
         # GPU and CPU blocks, which are profiled in the distributed executor.
-        self.scheduler = Scheduler(scheduler_config, cache_config, lora_config)
+        # ====NS changes it to SchedulerNs
+        # self.scheduler = Scheduler(scheduler_config, cache_config, lora_config)
+        self.scheduler = SchedulerNs(scheduler_config, cache_config, lora_config)
+
+        self.streaming = streaming
 
         # Metric Logging.
         if self.log_stats:
@@ -131,11 +137,21 @@ class LLMEngine:
             initialize_ray_cluster(parallel_config)
             from vllm.executor.ray_gpu_executor import RayGPUExecutor
             executor_class = RayGPUExecutor
-        else:
+            #TODO: add RayCPUExecutor
+        # ====NS changes to check cuda device
+        elif engine_args.device.lower() == "cuda":
             assert parallel_config.world_size == 1, (
                 "Ray is required if parallel_config.world_size > 1.")
             from vllm.executor.gpu_executor import GPUExecutor
             executor_class = GPUExecutor
+        # ====NS changes to add CPUExecutor for 'neuralspeed' quantization    
+        else:
+            assert parallel_config.world_size == 1, (
+                "Ray is required if parallel_config.world_size > 1.")
+            assert engine_args.quantization == "neuralspeed", (
+                "quantization should be neuralspeed if device is CPU.")
+            from vllm.executor.cpu_executor import CPUExecutor
+            executor_class = CPUExecutor
 
         # Create the LLM engine.
         engine = cls(*engine_configs,
@@ -354,7 +370,6 @@ class LLMEngine:
 
     def _process_sequence_group_outputs(self, seq_group: SequenceGroup,
                                         outputs: SequenceGroupOutput) -> None:
-
         # Process prompt logprobs
         prompt_logprobs = outputs.prompt_logprobs
         if prompt_logprobs is not None:
@@ -382,7 +397,8 @@ class LLMEngine:
 
         # Process the child samples for each parent sequence
         for parent in parent_seqs:
-            child_samples: List[SequenceOutput] = parent_child_dict[
+            # ====NS changed to support FinalSequenceOutputs
+            child_samples: List[Union[SequenceOutput, FinalSequenceOutputs]] = parent_child_dict[
                 parent.seq_id]
             if len(child_samples) == 0:
                 # This parent sequence has no children samples. Remove
@@ -403,16 +419,22 @@ class LLMEngine:
             # We reuse the parent sequence here to reduce redundant memory
             # copies, especially when using non-beam search sampling methods.
             last_child_sample = child_samples[-1]
-            parent.append_token_id(last_child_sample.output_token,
+            # ====NS changed to support non-streaming case
+            if isinstance(last_child_sample, SequenceOutput):
+                parent.append_token_id(last_child_sample.output_token,
                                    last_child_sample.logprobs)
+            elif last_child_sample.output_tokens: # ====NS do nothing when there is no output token
+                parent.append_token_ids(last_child_sample.output_tokens, last_child_sample.logprobs if last_child_sample.logprobs is not None else {})
+                parent.status = SequenceStatus.FINISHED_STOPPED
             child_seqs.append((parent, parent))
 
         for seq, _ in child_seqs:
             self._decode_sequence(seq, seq_group.sampling_params)
             self._check_stop(seq, seq_group.sampling_params)
 
+        # ====NS changed to support non-streaming case
         # Non-beam search case
-        if not seq_group.sampling_params.use_beam_search:
+        if (not seq_group.sampling_params.use_beam_search) or (not self.streaming):
             # For newly created child sequences, add them to the sequence group
             # and fork them in block manager if they are not finished.
             for seq, parent in child_seqs:
@@ -531,7 +553,8 @@ class LLMEngine:
 
     def _process_model_outputs(
             self, output: SamplerOutput,
-            scheduler_outputs: SchedulerOutputs) -> List[RequestOutput]:
+            # ====NS changes to SchedulerOutputsNs
+            scheduler_outputs: SchedulerOutputsNs) -> List[RequestOutput]:
         now = time.time()
         # Update the scheduled sequence groups with the model outputs.
         scheduled_seq_groups = scheduler_outputs.scheduled_seq_groups
@@ -633,7 +656,8 @@ class LLMEngine:
             self.stat_logger.log(self._get_stats(scheduler_outputs=None))
 
     def _get_stats(self,
-                   scheduler_outputs: Optional[SchedulerOutputs]) -> Stats:
+                   # ====NS changes to SchedulerOutputsNs
+                   scheduler_outputs: Optional[SchedulerOutputsNs]) -> Stats:
         """Get Stats to be Logged to Prometheus."""
         now = time.time()
 
@@ -725,20 +749,34 @@ class LLMEngine:
 
     def _decode_sequence(self, seq: Sequence, prms: SamplingParams) -> None:
         """Decodes the new token for a sequence."""
-        all_input_ids = seq.get_token_ids()
+        # ====NS changes to get output tokens only
+        # all_input_ids = seq.get_token_ids()
+        output_token_ids = seq.get_output_token_ids()
         self._decode_logprobs(seq, prms, seq.output_logprobs[-1],
-                              all_input_ids)
+                              output_token_ids)
 
+        # (new_tokens, new_output_text, prefix_offset,
+        #  read_offset) = detokenize_incrementally(
+        #      self.get_tokenizer_for_seq(seq),
+        #      all_input_ids=output_token_ids,
+        #      prev_tokens=seq.tokens,
+        #      prefix_offset=seq.prefix_offset,
+        #      read_offset=seq.read_offset,
+        #      skip_special_tokens=prms.skip_special_tokens,
+        #      spaces_between_special_tokens=prms.spaces_between_special_tokens,
+        #  )
+        # ====NS decode all output tokens
         (new_tokens, new_output_text, prefix_offset,
-         read_offset) = detokenize_incrementally(
+         read_offset) = detokenize_output_tokens(
              self.get_tokenizer_for_seq(seq),
-             all_input_ids=all_input_ids,
+             all_input_ids=output_token_ids,
              prev_tokens=seq.tokens,
              prefix_offset=seq.prefix_offset,
              read_offset=seq.read_offset,
              skip_special_tokens=prms.skip_special_tokens,
              spaces_between_special_tokens=prms.spaces_between_special_tokens,
          )
+
         if seq.tokens is None:
             seq.tokens = new_tokens
         else:

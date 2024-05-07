@@ -10,7 +10,9 @@ from setuptools import setup, find_packages, Extension
 from setuptools.command.build_ext import build_ext
 from shutil import which
 import torch
-from torch.utils.cpp_extension import CUDA_HOME
+#from torch.utils.cpp_extension import CUDA_HOME
+
+CUDA_HOME = "./"
 
 ROOT_DIR = os.path.dirname(__file__)
 
@@ -61,12 +63,14 @@ class cmake_build_ext(build_ext):
         except AttributeError:
             num_jobs = os.cpu_count()
 
-        nvcc_cuda_version = get_nvcc_cuda_version()
-        if nvcc_cuda_version >= Version("11.2"):
-            nvcc_threads = int(os.getenv("NVCC_THREADS", 8))
-            num_jobs = max(1, round(num_jobs / (nvcc_threads / 4)))
-        else:
-            nvcc_threads = None
+        nvcc_threads = None
+        if _is_cuda():
+            nvcc_cuda_version = get_nvcc_cuda_version()
+            if nvcc_cuda_version >= Version("11.2"):
+                nvcc_threads = int(os.getenv("NVCC_THREADS", 8))
+                num_jobs = max(1, round(num_jobs / (nvcc_threads / 4)))
+            else:
+                nvcc_threads = None
 
         return num_jobs, nvcc_threads
 
@@ -168,7 +172,7 @@ class cmake_build_ext(build_ext):
 
 
 def _is_cuda() -> bool:
-    return torch.version.cuda is not None
+    return False
 
 
 def _is_hip() -> bool:
@@ -280,7 +284,7 @@ def get_vllm_version() -> str:
             neuron_version_str = neuron_version.replace(".", "")[:3]
             version += f"+neuron{neuron_version_str}"
     else:
-        raise RuntimeError("Unknown runtime environment")
+        version += "+cpu"
 
     return version
 
@@ -312,8 +316,10 @@ def get_requirements() -> List[str]:
         with open(get_path("requirements-neuron.txt")) as f:
             requirements = f.read().strip().split("\n")
     else:
-        raise ValueError(
-            "Unsupported platform, please use CUDA, ROCM or Neuron.")
+        # raise ValueError(
+        #     "Unsupported platform, please use CUDA, ROCM or Neuron.")
+        with open(get_path("requirements-cpu.txt")) as f:
+            requirements = f.read().strip().split("\n")
 
     return requirements
 
@@ -326,8 +332,8 @@ if _is_cuda():
     if _install_punica():
         ext_modules.append(CMakeExtension(name="vllm._punica_C"))
 
-if not _is_neuron():
-    ext_modules.append(CMakeExtension(name="vllm._C"))
+# if not _is_neuron():
+#     ext_modules.append(CMakeExtension(name="vllm._C"))
 
 package_data = {
     "vllm": ["py.typed", "model_executor/layers/fused_moe/configs/*.json"]
