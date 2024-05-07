@@ -33,8 +33,7 @@ class NSModel(nn.Module):
                 input_ids: torch.Tensor,
                 positions: torch.Tensor,
                 kv_caches: List[torch.Tensor],
-                attn_metadata: AttentionMetadata,
-                seq_ids: List[int] = None):
+                attn_metadata: AttentionMetadata):
         assert len(kv_caches) == 1, "kv_caches should have 1 element here"
         # use data_ptr and torch type in str to avoid inference engine model depends on pytorch and vllm types
         return self.ie_model(input_ids.data_ptr(),
@@ -43,8 +42,7 @@ class NSModel(nn.Module):
                              attn_metadata.is_prompt,
                              attn_metadata.block_tables.data_ptr(),
                              attn_metadata.slot_mapping.data_ptr(),
-                             attn_metadata.prompt_lens,
-                             seq_ids
+                             attn_metadata.prompt_lens
                              )
     
     def init_inference_engine(self, model_config: ModelConfig, parallel_config: ParallelConfig, scheduler_config: SchedulerConfig):
@@ -79,6 +77,23 @@ def execute_model(
     ) -> Optional[SamplerOutput]:
         (input_tokens, input_positions, attn_metadata, sampling_metadata
          ) = self.prepare_input_tensors(seq_group_metadata_list)
+        
+        # set seq id to first element of block in kv cache
+        # one sequence one block
+        if attn_metadata.is_prompt:
+            kv_cache = kv_caches[0]
+            # 1 for block_size
+            block_tables = torch.zeros((len(seq_group_metadata_list) + 1), dtype=torch.int)
+            block_tables[0] = self.block_size
+            i = 1
+            for seq_g_meta in seq_group_metadata_list:
+                for seq_id, block_nbrs in seq_g_meta.block_tables.items():
+                    block_nbr = block_nbrs[0]
+                    kv_cache[block_nbr][0][0] = seq_id
+                    block_tables[i] = block_nbr
+                    i = i + 1
+            assert i == block_tables.shape[0], "inconsistent block tables and sequences"
+            attn_metadata.block_tables = block_tables
 
         model_executable = self.model
         execute_model_kwargs = {
@@ -86,7 +101,6 @@ def execute_model(
             "positions": input_positions,
             "kv_caches": kv_caches,
             "attn_metadata": attn_metadata,
-            "seq_ids": sampling_metadata.seq_data.keys()
         }
 
         hidden_states = model_executable(**execute_model_kwargs)

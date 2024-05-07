@@ -109,7 +109,7 @@ class NSCPUCacheEngine:
         space_value = block_size * scheduler_config.max_num_seqs * 4 # int32
         cache_config.cpu_kvcache_space_bytes = space_value
         os.environ[space_key] = str(float(space_value)/_GB)
-        logger.info("reset cache_config.cpu_kvcache_space_bytes to %s", os.environ[space_key])
+        logger.info("reset cache_config.cpu_kvcache_space_bytes to %s GB", os.environ[space_key])
         
         total = block_size
         # if cache_dtype == "auto":
