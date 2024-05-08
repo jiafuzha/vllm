@@ -7,9 +7,16 @@ from vllm.model_executor.model_loader.weight_utils import get_quant_config
 
 from vllm.logger import init_logger
 
+from inference_engine import Model as IE_Model
+
 logger = init_logger(__name__)
 
+# global model object to store the model
+#==========================================================================================
+_IE_MODEL: IE_Model = None
+
 # allow ns quantization
+#==========================================================================================
 vllm_config = importlib.import_module('vllm.config')
 old_verify_quantization = vllm_config.ModelConfig._verify_quantization
 
@@ -50,15 +57,16 @@ quant._QUANTIZATION_CONFIG_REGISTRY["ns"] = NSQuantConfig
 logger.info("__ns extension: add ns quantization config, %s", NSQuantConfig.__name__)
 
 # use ns model loader for ns
+#==========================================================================================
 vllm_loader = importlib.import_module('vllm.model_executor.model_loader.loader')
 old_get_model_loader = vllm_loader.get_model_loader
 
-from vllm.extension.ns.model.ns_loader import NSModelLoader
+from vllm.extension.ns.model.ns_loader import NSModelLoaderV2
 from vllm.config import LoadConfig
 
 def get_model_loader_ns(load_config: LoadConfig) -> vllm_loader.BaseModelLoader:
     if os.environ["NS_QUANTIZATION"] == "1":
-        return NSModelLoader(load_config)
+        return NSModelLoaderV2(load_config)
     return old_get_model_loader(load_config)
 
 vllm_loader.get_model_loader = get_model_loader_ns
@@ -78,17 +86,23 @@ vllm_loader._get_linear_method = _get_linear_method_ns
 model_loader = importlib.import_module('vllm.model_executor.model_loader')
 importlib.reload(model_loader)
 
-logger.info("__ns extension: use ns model loader for ns model, %s", NSModelLoader.__name__)
+logger.info("__ns extension: use ns model loader for ns model, %s", NSModelLoaderV2.__name__)
 
 # register ns model
-from vllm.model_executor.models import ModelRegistry
+# from vllm.model_executor.models import ModelRegistry
+
+# replace LlamaModel in models/llama.py with our NSLLamaModel
+#==========================================================================================
 from vllm.extension.ns.model.ns_model import NSLLamaModel
+# ModelRegistry.register_model("LlamaForCausalLM", NSLLamaModel)
 
-ModelRegistry.register_model("LlamaForCausalLM", NSLLamaModel)
+vllm_llama = importlib.import_module('vllm.model_executor.models.llama')
+vllm_llama.LlamaModel = NSLLamaModel
 
-logger.info("__ns extension: register ns model, %s", NSLLamaModel.__name__)
+logger.info("__ns extension: replace LlamaModel with ns LLamaModel, %s", NSLLamaModel.__name__)
 
 # use our CPUCacheEngine for ns
+#==========================================================================================
 cpu_worker = importlib.import_module('vllm.worker.cpu_worker')
 
 from vllm.extension.ns.kv_cache.ns_cache import NSCPUCacheEngine
@@ -104,6 +118,7 @@ cpu_worker.CPUWorker.get_cache_block_size_bytes = get_cache_block_size_bytes
 logger.info("__ns extension: use ns cache engine for ns, %s", NSCPUCacheEngine.__name__)
 
 # use our execute_model method to do some conversion and pass more parameters
+#==========================================================================================
 cpu_model_runner = importlib.import_module('vllm.worker.cpu_model_runner')
 
 from vllm.extension.ns.model.ns_model import execute_model
@@ -111,4 +126,24 @@ cpu_model_runner.CPUModelRunner.execute_model = execute_model
 
 logger.info("__ns extension: replace execute_model in cpu_model_runner, %s", execute_model.__name__)
 
+# use extended BlockSpaceManagerV1 to allocate and free native slot and kv caches
+#==========================================================================================
+interfaces = importlib.import_module("vllm.core.interfaces")
 
+def get_block_space_manager_class(version: str):
+    version = version.lower()
+
+    if version == "v1":
+        from vllm.extension.ns.kv_cache.ns_cache import NSBlockSpaceManagerV1
+        return NSBlockSpaceManagerV1
+
+    # TODO: v2 is to be supported
+    # if version == "v2":
+    #     from vllm.core.block_manager_v2 import BlockSpaceManagerV2
+    #     return BlockSpaceManagerV2
+
+    raise ValueError(f"Unknown version {version=}")
+
+interfaces.BlockSpaceManager.get_block_space_manager_class = get_block_space_manager_class
+
+logger.info("__ns extension: replace BlockSpaceManager.get_block_space_manager_class in vllm.core.interfaces with %s", get_block_space_manager_class.__name__)

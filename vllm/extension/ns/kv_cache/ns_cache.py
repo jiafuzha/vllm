@@ -1,8 +1,11 @@
-from typing import List, Dict
+from typing import List, Dict, Optional
 import os
 import torch
 from vllm.config import CacheConfig, ModelConfig, ParallelConfig, DeviceConfig, SchedulerConfig
+from vllm.sequence import Sequence
 from vllm.utils import STR_DTYPE_TO_TORCH_DTYPE
+
+from vllm.core.block_manager_v1 import BlockSpaceManagerV1
 
 from vllm.logger import init_logger
 
@@ -120,3 +123,31 @@ class NSCPUCacheEngine:
 
         # we use int32 to store native kv cache slot_id
         return 4 * total
+    
+
+class NSBlockSpaceManagerV1(BlockSpaceManagerV1):
+    def __init__(self,
+        block_size: int,
+        num_gpu_blocks: int,
+        num_cpu_blocks: int,
+        watermark: float = 0.01,
+        sliding_window: Optional[int] = None,
+        enable_caching: bool = False):
+        super().__init__(block_size, num_gpu_blocks, num_cpu_blocks, watermark, sliding_window, enable_caching)
+        from vllm.extension import ns
+        if ns._IE_MODEL is None:
+            raise ValueError("vllm.extension.ns._IE_model should not be empty")
+        self.ie_model = ns._IE_MODEL
+        self.ie_model.set_block_size(block_size)
+        
+
+    def fork(self, parent_seq: Sequence, child_seq: Sequence) -> None:
+        super().fork(parent_seq, child_seq)
+        # if not self.ie_model.assign_slot_and_copy_kv_cache(parent_seq.seq_id, child_seq.seq_id):
+        #     raise ValueError("cannot assign slot and copy kv cache for child seq")
+        # TODO: set parent seq id to kv cache to pass to native
+
+    def free(self, seq: Sequence) -> None:
+        super().free(seq)
+        if not self.ie_model.free_slot(seq.seq_id):
+            raise ValueError("cannot free slot for seq")

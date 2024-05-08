@@ -138,3 +138,33 @@ class NSModelLoader(vllm_loader.BaseModelLoader):
                                                True)), )
 
         return model.eval()
+    
+class NSModelLoaderV2(vllm_loader.DefaultModelLoader):
+
+    def load_model(self, *, model_config: ModelConfig,
+                   device_config: DeviceConfig,
+                   lora_config: Optional[LoRAConfig],
+                   vision_language_config: Optional[VisionLanguageConfig],
+                   parallel_config: ParallelConfig,
+                   scheduler_config: SchedulerConfig) -> nn.Module:
+        if (model_config.quantization is None) or (model_config.quantization != 'ns'):
+            raise ValueError(f"Model {model_config.model} is not a NS model")
+        
+        with set_default_torch_dtype(model_config.dtype):
+            with torch.device(device_config.device):
+                vllm_model = vllm_loader._initialize_model(model_config, self.load_config,
+                                          lora_config, vision_language_config)
+            # initialize native inference engine
+            vllm_model.model.init_inference_engine(model_config, parallel_config, scheduler_config)
+            vllm_model.model.load_weights([0])
+            weights_generator = self._get_weights_iterator(model_config.model,
+                                           model_config.revision,
+                                           fall_back_to_pt=getattr(
+                                               vllm_model,
+                                               "fall_back_to_pt_during_load",
+                                               True))
+            
+            filtered_weights = [(name, weight) for name, weight in weights_generator if (name == "lm_head.weight" or name == "model.embed_tokens.weight")]
+            vllm_model.load_weights(filtered_weights)
+
+        return vllm_model.eval()

@@ -1,6 +1,7 @@
 from typing import List, Optional
-import os
+import ctypes
 import torch
+import numpy as np
 from torch import nn
 
 from transformers import PretrainedConfig
@@ -8,12 +9,14 @@ from transformers import LlamaConfig
 
 from vllm.config import LoRAConfig, ModelConfig, SchedulerConfig, ParallelConfig
 from vllm.model_executor.layers.linear import LinearMethodBase
-from vllm.model_executor.layers.sampler import Sampler
 from vllm.attention import AttentionMetadata
 
 from inference_engine import Model as IE_Model
 
+from vllm.model_executor.layers.vocab_parallel_embedding import VocabParallelEmbedding
 from vllm.sequence import SamplerOutput, SequenceGroupMetadata
+
+from vllm.extension import ns
 
 
 class NSModel(nn.Module):
@@ -27,7 +30,16 @@ class NSModel(nn.Module):
         self.ie_model = None
         self.tokenizer = None
 
-        self.sampler = Sampler()
+        self.padding_idx = config.pad_token_id
+        lora_vocab = (lora_config.lora_extra_vocab_size *
+                      (lora_config.max_loras or 1)) if lora_config else 0
+        self.vocab_size = config.vocab_size + lora_vocab
+        self.org_vocab_size = config.vocab_size
+        self.embed_tokens = VocabParallelEmbedding(
+            self.vocab_size,
+            config.hidden_size,
+            org_num_embeddings=config.vocab_size,
+        )
 
     def forward(self,
                 input_ids: torch.Tensor,
@@ -60,7 +72,9 @@ class NSModel(nn.Module):
                                          compute_dtype=qc.compute_dtype,
                                         )
         self.ie_model.load_model()
-
+        if ns._IE_MODEL:
+            raise ValueError("vllm.extension.ns._IE_model should be empty")
+        ns._IE_MODEL = self.ie_model
     
 class NSLLamaModel(NSModel):
     def __init__(self, config: LlamaConfig,
@@ -68,6 +82,12 @@ class NSLLamaModel(NSModel):
                    lora_config: Optional[LoRAConfig] = None):
         super().__init__(config, linear_method, lora_config)
 
+
+
+def native_ptr_to_tensor(hidden_states_ptr, seq_len_sum, hidden_size):
+    data = ctypes.cast(hidden_states_ptr, ctypes.POINTER(ctypes.c_float))
+    data_array = np.ctypeslib.as_array(data, shape=(seq_len_sum * hidden_size,))
+    return torch.frombuffer(data_array, dtype=torch.float).view(seq_len_sum, hidden_size)
 
 # modified execute_model in cpu_model_runner.py to pass sequence_id and convert tensor to int32 for now
 def execute_model(
@@ -103,7 +123,11 @@ def execute_model(
             "attn_metadata": attn_metadata,
         }
 
-        hidden_states = model_executable(**execute_model_kwargs)
+        hidden_states_ptr = model_executable(**execute_model_kwargs)
+
+        hidden_states = native_ptr_to_tensor(hidden_states_ptr, input_tokens.shape[0], self.model_config.hf_config.hidden_size)
+
+        hidden_states = hidden_states.to(self.model_config.dtype)
 
         # Compute the logits.
         logits = self.model.compute_logits(hidden_states, sampling_metadata)
