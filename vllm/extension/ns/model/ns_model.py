@@ -102,10 +102,8 @@ def execute_model(
         # one sequence one block
         if attn_metadata.is_prompt:
             kv_cache = kv_caches[0]
-            # 1 for block_size
-            block_tables = torch.zeros((len(seq_group_metadata_list) + 1), dtype=torch.int)
-            block_tables[0] = self.block_size
-            i = 1
+            block_tables = torch.zeros((len(seq_group_metadata_list)), dtype=torch.int)
+            i = 0
             for seq_g_meta in seq_group_metadata_list:
                 for seq_id, block_nbrs in seq_g_meta.block_tables.items():
                     block_nbr = block_nbrs[0]

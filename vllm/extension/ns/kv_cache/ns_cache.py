@@ -2,7 +2,7 @@ from typing import List, Dict, Optional
 import os
 import torch
 from vllm.config import CacheConfig, ModelConfig, ParallelConfig, DeviceConfig, SchedulerConfig
-from vllm.sequence import Sequence
+from vllm.sequence import Sequence, SequenceGroup
 from vllm.utils import STR_DTYPE_TO_TORCH_DTYPE
 
 from vllm.core.block_manager_v1 import BlockSpaceManagerV1
@@ -10,6 +10,8 @@ from vllm.core.block_manager_v1 import BlockSpaceManagerV1
 from vllm.logger import init_logger
 
 logger = init_logger(__name__)
+
+_KV_CACHES: List[torch.Tensor] = None
 
 class NSCPUCacheEngine:
     """Origin:
@@ -56,6 +58,9 @@ class NSCPUCacheEngine:
         # Initialize the cache.
         # Note: fake kv cache here. We only store native KV cache slot_id here
         self.cpu_cache = self._allocate_kv_cache(self.num_cpu_blocks)
+        if _KV_CACHES:
+            raise ValueError("KV cache is already initialized")
+        _KV_CACHES = self.cpu_cache
 
     def _allocate_kv_cache(
         self,
@@ -139,13 +144,27 @@ class NSBlockSpaceManagerV1(BlockSpaceManagerV1):
             raise ValueError("vllm.extension.ns._IE_model should not be empty")
         self.ie_model = ns._IE_MODEL
         self.ie_model.set_block_size(block_size)
-        
+        if _KV_CACHES is None:
+            raise ValueError("KV cache should be set in " + NSCPUCacheEngine.__name__)
 
     def fork(self, parent_seq: Sequence, child_seq: Sequence) -> None:
         super().fork(parent_seq, child_seq)
         # if not self.ie_model.assign_slot_and_copy_kv_cache(parent_seq.seq_id, child_seq.seq_id):
         #     raise ValueError("cannot assign slot and copy kv cache for child seq")
-        # TODO: set parent seq id to kv cache to pass to native
+        kv_cache = _KV_CACHES[0]
+        # one block per sequence
+        parent_block_nbr = self.block_tables[parent_seq.seq_id][0].block_number
+        child_block_nbr = self.block_tables[child_seq.seq_id][0].block_number
+        # 0 0 -> seq_id, will be set in execute_model
+        # 0 1 -> slot_id, will be set in native
+        # 1 0 -> has parent sequence, -1
+        # 1 1 -> if has parent sequence (-1), parent seq_id
+        # 2 0 -> not used
+        # 2 1 -> if has parent sequence (-1), parent slot_id
+        parent_slot_id = kv_cache[parent_block_nbr][0][1]
+        kv_cache[child_block_nbr][1][0] = -1
+        kv_cache[child_block_nbr][1][1] = parent_seq.seq_id
+        kv_cache[child_block_nbr][2][1] = parent_slot_id # need to copy kv cache in native
 
     def free(self, seq: Sequence) -> None:
         super().free(seq)
