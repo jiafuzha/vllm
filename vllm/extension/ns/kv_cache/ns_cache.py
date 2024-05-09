@@ -1,4 +1,4 @@
-from typing import List, Dict, Optional
+from typing import List, Dict, Optional, Tuple
 import os
 import torch
 from vllm.config import CacheConfig, ModelConfig, ParallelConfig, DeviceConfig, SchedulerConfig
@@ -139,13 +139,19 @@ class NSBlockSpaceManagerV1(BlockSpaceManagerV1):
         sliding_window: Optional[int] = None,
         enable_caching: bool = False):
         super().__init__(block_size, num_gpu_blocks, num_cpu_blocks, watermark, sliding_window, enable_caching)
+
+        if _KV_CACHES is None:
+            raise ValueError("KV cache should be set in " + NSCPUCacheEngine.__name__)
+
         from vllm.extension import ns
         if ns._IE_MODEL is None:
             raise ValueError("vllm.extension.ns._IE_model should not be empty")
         self.ie_model = ns._IE_MODEL
         self.ie_model.set_block_size(block_size)
-        if _KV_CACHES is None:
-            raise ValueError("KV cache should be set in " + NSCPUCacheEngine.__name__)
+        self.ie_model.set_kv_caches_ptr(_KV_CACHES[0].data_ptr())
+        
+        # corresponding kv cache to be copied from. parent_seq_id -> [child_seq_id]
+        self.kv_cache_copy_waiting: Dict[int, Tuple[Sequence, List[Sequence]]] = {}
 
     def fork(self, parent_seq: Sequence, child_seq: Sequence) -> None:
         super().fork(parent_seq, child_seq)
@@ -155,18 +161,47 @@ class NSBlockSpaceManagerV1(BlockSpaceManagerV1):
         # one block per sequence
         parent_block_nbr = self.block_tables[parent_seq.seq_id][0].block_number
         child_block_nbr = self.block_tables[child_seq.seq_id][0].block_number
-        # 0 0 -> seq_id, will be set in execute_model
+        # 0 0 -> seq_id
         # 0 1 -> slot_id, will be set in native
-        # 1 0 -> has parent sequence, -1
+        # 1 0 -> has parent sequence, yes: -1, no: 0
         # 1 1 -> if has parent sequence (-1), parent seq_id
-        # 2 0 -> not used
+        # 2 0 -> if kv cache copied, yes: -1, no: 0
         # 2 1 -> if has parent sequence (-1), parent slot_id
+        # 3 0 -> 
         parent_slot_id = kv_cache[parent_block_nbr][0][1]
+        # TODO: check seq_id is correct in execute_model
+        kv_cache[child_block_nbr][0][0] = child_seq.seq_id
         kv_cache[child_block_nbr][1][0] = -1
         kv_cache[child_block_nbr][1][1] = parent_seq.seq_id
         kv_cache[child_block_nbr][2][1] = parent_slot_id # need to copy kv cache in native
+        # add to copy waiting which will be copied before parent sequence is freed
+        if parent_seq.seq_id in self.kv_cache_copy_waiting:
+            self.kv_cache_copy_waiting[parent_seq.seq_id][1].append(child_seq)
+        else:
+            self.kv_cache_copy_waiting[parent_seq.seq_id] = (parent_seq, [child_seq])
 
     def free(self, seq: Sequence) -> None:
+        copy_params: List[int] = []
+        if seq.seq_id in self.kv_cache_copy_waiting:
+            # construct copy structure before seqs freed
+            _, child_seqs = self.kv_cache_copy_waiting.pop(seq.seq_id)
+            for child_seq in child_seqs:
+                if child_seq.seq_id in self.block_tables: # make sure child seq is still valid
+                    copy_params.append(child_seq.seq_id)
+                    copy_params.append(self.block_tables[child_seq.seq_id][0].block_number)
+                    copy_params.append(seq.get_prompt_len())
+                    copy_params.append(seq.get_len())
+
+        # reset corresponding kv_caches
+        kv_cache = _KV_CACHES[0]
+        block_nbr = self.block_tables[seq.seq_id][0].block_number
+        kv_cache[block_nbr][0:3][:] = 0 # other elements are not used
+        
         super().free(seq)
-        if not self.ie_model.free_slot(seq.seq_id):
+        # free native slot and may copy kv cache
+        # no copy if nbr_of_copy is 0 
+        # no copy if the slot can be reused by child_seq, then update kv_cache to set slot_id for child_seq
+        if not self.ie_model.copy_kv_cache_and_free_slot(seq.seq_id, copy_params):
             raise ValueError("cannot free slot for seq")
+        
+        

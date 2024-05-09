@@ -139,4 +139,5 @@ def execute_model(
             logits=logits,
             sampling_metadata=sampling_metadata,
         )
+
         return output
