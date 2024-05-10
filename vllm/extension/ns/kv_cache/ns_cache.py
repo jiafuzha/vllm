@@ -60,6 +60,7 @@ class NSCPUCacheEngine:
         # Initialize the cache.
         # Note: fake kv cache here. We only store native KV cache slot_id here
         self.cpu_cache = self._allocate_kv_cache(self.num_cpu_blocks)
+        global _KV_CACHES
         if _KV_CACHES:
             raise ValueError("KV cache is already initialized")
         _KV_CACHES = self.cpu_cache
@@ -142,6 +143,7 @@ class NSBlockSpaceManagerV1(BlockSpaceManagerV1):
         enable_caching: bool = False):
         super().__init__(block_size, num_gpu_blocks, num_cpu_blocks, watermark, sliding_window, enable_caching)
 
+        global _KV_CACHES
         if _KV_CACHES is None:
             raise ValueError("KV cache should be set in " + NSCPUCacheEngine.__name__)
 
@@ -154,23 +156,54 @@ class NSBlockSpaceManagerV1(BlockSpaceManagerV1):
         
         # corresponding kv cache to be copied from. parent_seq_id -> [child_seq_id]
         self.kv_cache_copy_waiting: Dict[int, Tuple[Sequence, List[Sequence]]] = {}
+        self.seq_id_slot_id: Dict[int, int] = {}
 
+    # already return true since we use native slots which are preallocated
+    def can_append_slots(self,
+                         seq_group: SequenceGroup,
+                         num_lookahead_slots: int = 0) -> bool:
+        return True
+    
+    # return empty dict since no slot to append
+    def append_slots(self, seq: Sequence, num_lookahead_slots: int = 0) -> Dict[int, List[int]]:
+        return {}
+
+    def remove_seq_from_block_tables(self, seq_id):
+        block_table = self.block_tables[seq_id][0]
+        block_table.ref_count -= 1
+        del self.block_tables[seq_id]
+
+    # TODO: parent_seq may not get freed, check block number in allocate and reassign block number if seqs have duplicate block nbr
     def fork(self, parent_seq: Sequence, child_seq: Sequence) -> None:
         super().fork(parent_seq, child_seq)
         # if not self.ie_model.assign_slot_and_copy_kv_cache(parent_seq.seq_id, child_seq.seq_id):
         #     raise ValueError("cannot assign slot and copy kv cache for child seq")
+        global _KV_CACHES
         kv_cache = _KV_CACHES[0]
         # one block per sequence
         parent_block_nbr = self.block_tables[parent_seq.seq_id][0].block_number
         child_block_nbr = self.block_tables[child_seq.seq_id][0].block_number
+        assert parent_block_nbr == child_block_nbr, "child block nbr should be equal to parent block nbr"
+        # kv cache usage
         # 0 0 -> seq_id
         # 0 1 -> slot_id, will be set in native
         # 1 0 -> has parent sequence, yes: -1, no: 0
         # 1 1 -> if has parent sequence (-1), parent seq_id
         # 2 0 -> if kv cache copied, yes: -1, no: 0
         # 2 1 -> if has parent sequence (-1), parent slot_id
-        parent_slot_id = kv_cache[parent_block_nbr][0][1]
-        # TODO: check seq_id is correct in execute_model
+        if parent_seq.seq_id not in self.kv_cache_copy_waiting: # parent block nbr is not resued yet, thus kv_cache not changed
+            parent_slot_id = kv_cache[parent_block_nbr][0][1]
+        else: # parent block nbr is occupied already, need to assign new block nbr and copy kv cache
+            parent_slot_id = self.seq_id_slot_id[parent_seq.seq_id]
+            # remove relation between child seq and block table
+            self.remove_seq_from_block_tables(child_seq.seq_id)
+            # allocate new one
+            block_table = self.gpu_allocator.allocate()
+            block_table.ref_count += 1
+            child_block_nbr = block_table.block_number
+            self.block_tables[child_seq.seq_id] = [block_table]
+
+        # check seq_id is correct in execute_model
         kv_cache[child_block_nbr][0][0] = child_seq.seq_id
         kv_cache[child_block_nbr][1][0] = ns._KV_CACHE_MARK_YES
         kv_cache[child_block_nbr][1][1] = parent_seq.seq_id
@@ -179,11 +212,15 @@ class NSBlockSpaceManagerV1(BlockSpaceManagerV1):
         if parent_seq.seq_id in self.kv_cache_copy_waiting:
             self.kv_cache_copy_waiting[parent_seq.seq_id][1].append(child_seq)
         else:
-            self.kv_cache_copy_waiting[parent_seq.seq_id] = (parent_seq, [child_seq])
+            # reuse parent_block_nbr, no copy needed
+            kv_cache[child_block_nbr][0][1] = parent_slot_id
+            kv_cache[child_block_nbr][2][0] = ns._KV_CACHE_MARK_YES
+            self.kv_cache_copy_waiting[parent_seq.seq_id] = (parent_seq, [])
+            self.seq_id_slot_id[parent_seq.seq_id] = parent_slot_id
 
     def free(self, seq: Sequence) -> None:
         copy_params: List[int] = []
-        if seq.seq_id in self.kv_cache_copy_waiting:
+        if seq.seq_id in self.kv_cache_copy_waiting: # block nbr reused
             # construct copy structure before seqs freed
             _, child_seqs = self.kv_cache_copy_waiting.pop(seq.seq_id)
             for child_seq in child_seqs:
@@ -192,13 +229,17 @@ class NSBlockSpaceManagerV1(BlockSpaceManagerV1):
                     copy_params.append(self.block_tables[child_seq.seq_id][0].block_number)
                     copy_params.append(seq.get_prompt_len())
                     copy_params.append(seq.get_len())
-
-        # reset corresponding kv_caches
-        kv_cache = _KV_CACHES[0]
-        block_nbr = self.block_tables[seq.seq_id][0].block_number
-        kv_cache[block_nbr][0:3][:] = 0 # other elements are not used
+            del self.seq_id_slot_id[seq.seq_id]
+            # just remove seq, but not free it since it's reused
+            self.remove_seq_from_block_tables(seq.seq_id)
+        else:
+            # reset corresponding kv_caches since it's not reused
+            global _KV_CACHES
+            kv_cache = _KV_CACHES[0]
+            block_nbr = self.block_tables[seq.seq_id][0].block_number
+            kv_cache[block_nbr][0:3][:] = 0 # other elements are not used
+            super().free(seq)
         
-        super().free(seq)
         # free native slot and may copy kv cache
         # no copy if nbr_of_copy is 0 
         # no copy if the slot can be reused by child_seq, then update kv_cache to set slot_id for child_seq

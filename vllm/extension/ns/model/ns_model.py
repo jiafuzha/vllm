@@ -48,13 +48,13 @@ class NSModel(nn.Module):
                 attn_metadata: AttentionMetadata):
         assert len(kv_caches) == 1, "kv_caches should have 1 element here"
         # use data_ptr and torch type in str to avoid inference engine model depends on pytorch and vllm types
+        # kv_cache pointer is set in NSBlockManager in advance
         return self.ie_model(input_ids.data_ptr(),
                              positions.data_ptr(),
-                             kv_caches[0].data_ptr(), # kv cache type is fixed, int32
                              attn_metadata.is_prompt,
                              attn_metadata.block_tables.data_ptr(),
                              attn_metadata.slot_mapping.data_ptr(),
-                             attn_metadata.prompt_lens if attn_metadata.is_prompt else attn_metadata.context_lens
+                             attn_metadata.prompt_lens
                              )
     
     def init_inference_engine(self, model_config: ModelConfig, parallel_config: ParallelConfig, scheduler_config: SchedulerConfig):
@@ -97,7 +97,7 @@ def execute_model(
     ) -> Optional[SamplerOutput]:
         (input_tokens, input_positions, attn_metadata, sampling_metadata
          ) = self.prepare_input_tensors(seq_group_metadata_list)
-        
+        # kv cache usage
         # 0 0 -> seq_id
         # 0 1 -> slot_id, will be set in native
         # 1 0 -> has parent sequence, yes: -1, no: 0
@@ -121,12 +121,15 @@ def execute_model(
             attn_metadata.block_tables = block_tables
         else:
             kv_cache = kv_caches[0]
+            prompt_lens: List[int] = []
             for seq_g_meta in seq_group_metadata_list:
                 for seq_id, block_nbrs in seq_g_meta.block_tables.items():
                     block_nbr = block_nbrs[0]
                     # check if seq_id matches
                     assert seq_id == kv_cache[block_nbr][0][0], "seq_ids in metadata and kv_caches not match"
+                    prompt_lens.append(seq_g_meta.seq_data[seq_id].get_prompt_len())
             attn_metadata.block_tables = attn_metadata.block_tables.squeeze(1) # we only have one block per sequence
+            attn_metadata.prompt_lens = prompt_lens
 
         model_executable = self.model
         execute_model_kwargs = {
