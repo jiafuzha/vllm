@@ -11,6 +11,13 @@ from inference_engine import Model as IE_Model
 
 logger = init_logger(__name__)
 
+# parameters for interacting with native code, same variables defined in native vllm_cont_batch.cpp
+#==========================================================================================
+_KV_CACHE_MARK_YES          = -1
+_KV_CACHE_MARK_NO           = 0
+_KV_CACHE_LAST_DIM          = 2
+_KV_CACHE_CPY_PARAMS_SIZE   = 4
+
 # global model object to store the model
 #==========================================================================================
 _IE_MODEL: IE_Model = None

@@ -54,7 +54,7 @@ class NSModel(nn.Module):
                              attn_metadata.is_prompt,
                              attn_metadata.block_tables.data_ptr(),
                              attn_metadata.slot_mapping.data_ptr(),
-                             attn_metadata.prompt_lens
+                             attn_metadata.prompt_lens if attn_metadata.is_prompt else attn_metadata.context_lens
                              )
     
     def init_inference_engine(self, model_config: ModelConfig, parallel_config: ParallelConfig, scheduler_config: SchedulerConfig):
@@ -98,6 +98,13 @@ def execute_model(
         (input_tokens, input_positions, attn_metadata, sampling_metadata
          ) = self.prepare_input_tensors(seq_group_metadata_list)
         
+        # 0 0 -> seq_id
+        # 0 1 -> slot_id, will be set in native
+        # 1 0 -> has parent sequence, yes: -1, no: 0
+        # 1 1 -> if has parent sequence (-1), parent seq_id
+        # 2 0 -> if kv cache copied, yes: -1, no: 0
+        # 2 1 -> if has parent sequence (-1), parent slot_id
+
         # set seq id to first element of block in kv cache
         # one sequence one block
         if attn_metadata.is_prompt:
@@ -112,6 +119,14 @@ def execute_model(
                     i = i + 1
             assert i == block_tables.shape[0], "inconsistent block tables and sequences"
             attn_metadata.block_tables = block_tables
+        else:
+            kv_cache = kv_caches[0]
+            for seq_g_meta in seq_group_metadata_list:
+                for seq_id, block_nbrs in seq_g_meta.block_tables.items():
+                    block_nbr = block_nbrs[0]
+                    # check if seq_id matches
+                    assert seq_id == kv_cache[block_nbr][0][0], "seq_ids in metadata and kv_caches not match"
+            attn_metadata.block_tables = attn_metadata.block_tables.squeeze(1) # we only have one block per sequence
 
         model_executable = self.model
         execute_model_kwargs = {

@@ -7,6 +7,8 @@ from vllm.utils import STR_DTYPE_TO_TORCH_DTYPE
 
 from vllm.core.block_manager_v1 import BlockSpaceManagerV1
 
+from vllm.extension import ns
+
 from vllm.logger import init_logger
 
 logger = init_logger(__name__)
@@ -71,7 +73,7 @@ class NSCPUCacheEngine:
         #     num_blocks, self.block_size, self.num_heads, self.head_size)
 
         # single tensor would be enough to store the sequence id/slot_id
-        kv_cache_shape = (num_blocks, self.block_size, 2)
+        kv_cache_shape = (num_blocks, self.block_size, ns._KV_CACHE_LAST_DIM)
         kv_cache: List[torch.Tensor] = []
         # for _ in range(self.num_layers):
         kv_cache.append(
@@ -167,11 +169,10 @@ class NSBlockSpaceManagerV1(BlockSpaceManagerV1):
         # 1 1 -> if has parent sequence (-1), parent seq_id
         # 2 0 -> if kv cache copied, yes: -1, no: 0
         # 2 1 -> if has parent sequence (-1), parent slot_id
-        # 3 0 -> 
         parent_slot_id = kv_cache[parent_block_nbr][0][1]
         # TODO: check seq_id is correct in execute_model
         kv_cache[child_block_nbr][0][0] = child_seq.seq_id
-        kv_cache[child_block_nbr][1][0] = -1
+        kv_cache[child_block_nbr][1][0] = ns._KV_CACHE_MARK_YES
         kv_cache[child_block_nbr][1][1] = parent_seq.seq_id
         kv_cache[child_block_nbr][2][1] = parent_slot_id # need to copy kv cache in native
         # add to copy waiting which will be copied before parent sequence is freed
