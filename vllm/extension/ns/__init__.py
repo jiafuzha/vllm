@@ -16,7 +16,7 @@ logger = init_logger(__name__)
 _KV_CACHE_MARK_YES          = -1
 _KV_CACHE_MARK_NO           = 0
 _KV_CACHE_LAST_DIM          = 2
-_KV_CACHE_CPY_PARAMS_SIZE   = 4
+_KV_CACHE_CPY_PARAMS_SIZE   = 5
 
 # global model object to store the model
 #==========================================================================================
