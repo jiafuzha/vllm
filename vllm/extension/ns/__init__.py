@@ -17,6 +17,7 @@ _KV_CACHE_MARK_YES          = -1
 _KV_CACHE_MARK_NO           = 0
 _KV_CACHE_LAST_DIM          = 2
 _KV_CACHE_CPY_PARAMS_SIZE   = 5
+_KV_CACHE_ELEMENT_USED      = 4
 
 # global model object to store the model
 #==========================================================================================

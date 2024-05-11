@@ -2,6 +2,10 @@ from vllm import LLM, SamplingParams
 
 from vllm.extension import ns as ns
 
+############################
+# TODO: TODO: TODO: reset request_id and seq_id before they reach to max value of int32_t
+############################
+
 # Sample prompts.
 prompts = [
     "Hello, my name is",

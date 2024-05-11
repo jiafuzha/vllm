@@ -187,6 +187,9 @@ class NSBlockSpaceManagerV1(BlockSpaceManagerV1):
         # 1 1 -> if has parent sequence (-1), parent seq_id
         # 2 0 -> if kv cache copied, yes: -1, no: 0
         # 2 1 -> if has parent sequence (-1), parent slot_id
+        # 3 0 -> beam_size if it's beam search. should be greater than 1
+        # 3 1 -> vllm request idx
+
         global _KV_CACHES
         kv_cache = _KV_CACHES[0]
         free_ids: List[int] = []
@@ -272,7 +275,7 @@ class NSBlockSpaceManagerV1(BlockSpaceManagerV1):
             global _KV_CACHES
             kv_cache = _KV_CACHES[0]
             block_nbr = self.block_tables[seq.seq_id][0].block_number
-            kv_cache[block_nbr][0:3][:] = 0 # other elements are not used
+            kv_cache[block_nbr][0:ns._KV_CACHE_ELEMENT_USED][:] = 0 # other elements are not used
         
             # free native slot only here
             if not self.ie_model.copy_kv_cache_and_free_slot([seq.seq_id], []):
@@ -282,5 +285,3 @@ class NSBlockSpaceManagerV1(BlockSpaceManagerV1):
         
         # free block table
         super().free(seq)
-        
-        

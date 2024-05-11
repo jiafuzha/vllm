@@ -104,6 +104,8 @@ def execute_model(
         # 1 1 -> if has parent sequence (-1), parent seq_id
         # 2 0 -> if kv cache copied, yes: -1, no: 0
         # 2 1 -> if has parent sequence (-1), parent slot_id
+        # 3 0 -> beam_size if it's beam search. should be greater than 1
+        # 3 1 -> vllm request idx
 
         # set seq id to first element of block in kv cache
         # one sequence one block
@@ -112,9 +114,14 @@ def execute_model(
             block_tables = torch.zeros((len(seq_group_metadata_list)), dtype=torch.int)
             i = 0
             for seq_g_meta in seq_group_metadata_list:
+                beam_search = seq_g_meta.sampling_params.use_beam_search
+                vllm_reqidx = int(seq_g_meta.request_id)
                 for seq_id, block_nbrs in seq_g_meta.block_tables.items():
                     block_nbr = block_nbrs[0]
                     kv_cache[block_nbr][0][0] = seq_id
+                    if beam_search:
+                        kv_cache[block_nbr][3][0] = seq_g_meta.sampling_params.best_of # beam size
+                        kv_cache[block_nbr][3][1] = vllm_reqidx
                     block_tables[i] = block_nbr
                     i = i + 1
             assert i == block_tables.shape[0], "inconsistent block tables and sequences"
@@ -125,6 +132,9 @@ def execute_model(
             for seq_g_meta in seq_group_metadata_list:
                 for seq_id, block_nbrs in seq_g_meta.block_tables.items():
                     block_nbr = block_nbrs[0]
+                    if beam_search:
+                        kv_cache[block_nbr][3][0] = seq_g_meta.sampling_params.best_of # beam size
+                        kv_cache[block_nbr][3][1] = vllm_reqidx
                     # check if seq_id matches
                     assert seq_id == kv_cache[block_nbr][0][0], "seq_ids in metadata and kv_caches not match"
                     prompt_lens.append(seq_g_meta.seq_data[seq_id].get_prompt_len())
