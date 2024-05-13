@@ -192,8 +192,6 @@ class NSBlockSpaceManagerV1(BlockSpaceManagerV1):
 
         global _KV_CACHES
         kv_cache = _KV_CACHES[0]
-        free_ids: List[int] = []
-        copy_params: List[int] = []
         for parent_seq_id in parent_seq_ids:
             if parent_seq_id not in self.kv_cache_copy_waiting:
                 continue
@@ -213,7 +211,7 @@ class NSBlockSpaceManagerV1(BlockSpaceManagerV1):
                     parent_slot_id = kv_cache[child_block_nbr][0][1]
                 # reuse parent block nbr, no copy needed, only free parent seq
                 if parent_seq_id in self.free_native_waiting:
-                    free_ids.append(parent_seq_id)
+                    # no need to free native slot since the slot will be reused here
                     self.free_native_waiting.remove(parent_seq_id)
                     # reuse parent_block_nbr, no copy needed
                     kv_cache[child_block_nbr][0][1] = parent_slot_id
@@ -223,21 +221,17 @@ class NSBlockSpaceManagerV1(BlockSpaceManagerV1):
                     super().free(child_seq)
                     # allocate new one
                     child_block_nbr = self.allocate_block_table_for_seq(child_seq.seq_id)
-                    # construct copy_param
-                    copy_params.append(child_seq.seq_id)
-                    copy_params.append(child_block_nbr)
-                    copy_params.append(child_seq.get_prompt_len())
-                    copy_params.append(child_seq.get_len())
-                    copy_params.append(parent_slot_id)
+                    # need to copy kv cache
+                    kv_cache[child_block_nbr][0][1] = 0
+                    kv_cache[child_block_nbr][2][0] = ns._KV_CACHE_MARK_NO
 
                 # check seq_id is correct in execute_model
                 kv_cache[child_block_nbr][0][0] = child_seq.seq_id
                 kv_cache[child_block_nbr][1][0] = ns._KV_CACHE_MARK_YES
                 kv_cache[child_block_nbr][1][1] = parent_seq_id
                 kv_cache[child_block_nbr][2][1] = parent_slot_id # need to copy kv cache in native
-        if free_ids or copy_params:
-            if not self.ie_model.copy_kv_cache_and_free_slot(free_ids, copy_params):
-                raise ValueError("cannot copy kv cache and free slot")
+            # cannot reset kv cache here since the blocks may be already used by child seqs
+            # it's ok not resetting kv cache since all control elements are set specifically in above logic and in execute_model (beam size and vllm group request idx)
         return True
     
     # return empty dict since no slot to append
@@ -271,15 +265,13 @@ class NSBlockSpaceManagerV1(BlockSpaceManagerV1):
         # free native slot when no need to copy kv cache
         # otherwise, do actual native slot free in "can_append_slot" which is called in scheduling running seqs.
         if seq.seq_id not in self.kv_cache_copy_waiting:
-            # reset corresponding kv_caches
+            block_nbr = self.block_tables[seq.seq_id][0].block_number
             global _KV_CACHES
             kv_cache = _KV_CACHES[0]
-            block_nbr = self.block_tables[seq.seq_id][0].block_number
-            kv_cache[block_nbr][0:ns._KV_CACHE_ELEMENT_USED][:] = 0 # other elements are not used
-        
-            # free native slot only here
-            if not self.ie_model.copy_kv_cache_and_free_slot([seq.seq_id], []):
+            # free native slot
+            if not self.ie_model.free_slots([seq.seq_id, kv_cache[block_nbr][3][1]]):
                 raise ValueError("cannot free slot for seq")
+            kv_cache[block_nbr][0:ns._KV_CACHE_ELEMENT_USED][:] = 0 # other elements are not used
         else:
             self.free_native_waiting.append(seq.seq_id)
         

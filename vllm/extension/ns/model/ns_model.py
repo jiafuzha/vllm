@@ -119,9 +119,9 @@ def execute_model(
                 for seq_id, block_nbrs in seq_g_meta.block_tables.items():
                     block_nbr = block_nbrs[0]
                     kv_cache[block_nbr][0][0] = seq_id
-                    if beam_search:
-                        kv_cache[block_nbr][3][0] = seq_g_meta.sampling_params.best_of # beam size
-                        kv_cache[block_nbr][3][1] = vllm_reqidx
+                    # for assign pre-allocated slots to reduce kv cache copy length
+                    kv_cache[block_nbr][3][0] = seq_g_meta.sampling_params.best_of if beam_search else 0 # beam size
+                    kv_cache[block_nbr][3][1] = vllm_reqidx
                     block_tables[i] = block_nbr
                     i = i + 1
             assert i == block_tables.shape[0], "inconsistent block tables and sequences"
@@ -130,11 +130,13 @@ def execute_model(
             kv_cache = kv_caches[0]
             prompt_lens: List[int] = []
             for seq_g_meta in seq_group_metadata_list:
+                beam_search = seq_g_meta.sampling_params.use_beam_search
+                vllm_reqidx = int(seq_g_meta.request_id)
                 for seq_id, block_nbrs in seq_g_meta.block_tables.items():
                     block_nbr = block_nbrs[0]
-                    if beam_search:
-                        kv_cache[block_nbr][3][0] = seq_g_meta.sampling_params.best_of # beam size
-                        kv_cache[block_nbr][3][1] = vllm_reqidx
+                    # for assign pre-allocated slots to reduce kv cache copy length
+                    kv_cache[block_nbr][3][0] = seq_g_meta.sampling_params.best_of if beam_search else 0 # beam size
+                    kv_cache[block_nbr][3][1] = vllm_reqidx
                     # check if seq_id matches
                     assert seq_id == kv_cache[block_nbr][0][0], "seq_ids in metadata and kv_caches not match"
                     prompt_lens.append(seq_g_meta.seq_data[seq_id].get_prompt_len())
