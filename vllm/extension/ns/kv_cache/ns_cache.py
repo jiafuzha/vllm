@@ -52,8 +52,8 @@ class NSCPUCacheEngine:
         #     self.dtype = model_config.dtype
         # else:
         #     self.dtype = STR_DTYPE_TO_TORCH_DTYPE[cache_config.cache_dtype]
-        # int32 should be enough to hold slot_id
-        self.dtype = torch.int32
+        # int64 to hold slot_id, seq_id, vllm_reqeust_id ...
+        self.dtype = torch.int64
 
         # Get attention backend.
         # self.attn_backend = get_attn_backend(model_config.dtype)

@@ -19,7 +19,6 @@ from vllm.sequence import SamplerOutput, SequenceGroupMetadata
 
 from vllm.extension import ns
 
-
 class NSModel(nn.Module):
     def __init__(self,
                  config: PretrainedConfig,
@@ -92,6 +91,8 @@ def native_ptr_to_tensor(hidden_states_ptr, seq_len_sum, hidden_size):
     data_array = np.ctypeslib.as_array(data, shape=(seq_len_sum * hidden_size,))
     return torch.frombuffer(data_array, dtype=torch.float).view(seq_len_sum, hidden_size)
 
+
+
 # modified execute_model in cpu_model_runner.py to pass sequence_id and convert tensor to int32 for now
 def execute_model(
         self,
@@ -118,13 +119,16 @@ def execute_model(
             i = 0
             for seq_g_meta in seq_group_metadata_list:
                 beam_search = seq_g_meta.sampling_params.use_beam_search
-                vllm_reqidx = int(seq_g_meta.request_id)
                 for seq_id, block_nbrs in seq_g_meta.block_tables.items():
                     block_nbr = block_nbrs[0]
                     kv_cache[block_nbr][0][0] = seq_id
                     # for assign pre-allocated slots to reduce kv cache copy length
-                    kv_cache[block_nbr][3][0] = seq_g_meta.sampling_params.best_of if beam_search else 0 # beam size
-                    kv_cache[block_nbr][3][1] = vllm_reqidx
+                    if beam_search:
+                        kv_cache[block_nbr][3][0] = seq_g_meta.sampling_params.best_of
+                        kv_cache[block_nbr][3][1] = get_vllm_reqidx(seq_g_meta.request_id)
+                    else:
+                        kv_cache[block_nbr][3][0] = 0 # beam size
+                        kv_cache[block_nbr][3][1] = -1
                     block_tables[i] = block_nbr
                     i = i + 1
             assert i == block_tables.shape[0], "inconsistent block tables and sequences"
@@ -134,12 +138,15 @@ def execute_model(
             prompt_lens: List[int] = []
             for seq_g_meta in seq_group_metadata_list:
                 beam_search = seq_g_meta.sampling_params.use_beam_search
-                vllm_reqidx = int(seq_g_meta.request_id)
                 for seq_id, block_nbrs in seq_g_meta.block_tables.items():
                     block_nbr = block_nbrs[0]
                     # for assign pre-allocated slots to reduce kv cache copy length
-                    kv_cache[block_nbr][3][0] = seq_g_meta.sampling_params.best_of if beam_search else 0 # beam size
-                    kv_cache[block_nbr][3][1] = vllm_reqidx
+                    if beam_search:
+                        kv_cache[block_nbr][3][0] = seq_g_meta.sampling_params.best_of
+                        kv_cache[block_nbr][3][1] = get_vllm_reqidx(seq_g_meta.request_id)
+                    else:
+                        kv_cache[block_nbr][3][0] = 0 # beam size
+                        kv_cache[block_nbr][3][1] = -1
                     # check if seq_id matches
                     assert seq_id == kv_cache[block_nbr][0][0], "seq_ids in metadata and kv_caches not match"
                     prompt_lens.append(seq_g_meta.seq_data[seq_id].get_prompt_len())

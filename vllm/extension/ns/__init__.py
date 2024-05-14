@@ -24,6 +24,8 @@ _KV_CACHE_ELEMENT_USED      = 4
 #==========================================================================================
 _IE_MODEL: IE_Model = None
 
+# global request_id to internal
+
 # allow ns quantization
 #==========================================================================================
 vllm_config = importlib.import_module('vllm.config')
