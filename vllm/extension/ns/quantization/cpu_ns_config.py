@@ -1,7 +1,9 @@
 from typing import List, Dict, Any, Optional
 import torch
+from torch.nn.modules import Module
 from vllm.model_executor.layers.quantization.base_config import (
-    QuantizationConfig)
+    QuantizationConfig,
+    QuantizeMethodBase)
 from vllm.model_executor.layers.linear import LinearMethodBase
 
 
@@ -39,6 +41,10 @@ class NSQuantConfig(QuantizationConfig):
 
     def get_scaled_act_names(self) -> List[str]:
         return []
+    
+    def get_quant_method(self, layer: Module) -> Optional[QuantizeMethodBase]:
+        return None
+    
     
 class NSLinearMethod(LinearMethodBase):
     def __init__(self, quant_config) -> None:

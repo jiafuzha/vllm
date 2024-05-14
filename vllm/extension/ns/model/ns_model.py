@@ -7,12 +7,13 @@ from torch import nn
 from transformers import PretrainedConfig
 from transformers import LlamaConfig
 
-from vllm.config import LoRAConfig, ModelConfig, SchedulerConfig, ParallelConfig
+from vllm.config import CacheConfig, LoRAConfig, ModelConfig, SchedulerConfig, ParallelConfig
 from vllm.model_executor.layers.linear import LinearMethodBase
 from vllm.attention import AttentionMetadata
 
 from inference_engine import Model as IE_Model
 
+from vllm.model_executor.layers.quantization.base_config import QuantizationConfig
 from vllm.model_executor.layers.vocab_parallel_embedding import VocabParallelEmbedding
 from vllm.sequence import SamplerOutput, SequenceGroupMetadata
 
@@ -20,12 +21,14 @@ from vllm.extension import ns
 
 
 class NSModel(nn.Module):
-    def __init__(self, config: PretrainedConfig,
-                   linear_method: Optional[LinearMethodBase],
-                   lora_config: Optional[LoRAConfig] = None):
+    def __init__(self,
+                 config: PretrainedConfig,
+                 cache_config: Optional[CacheConfig] = None,
+                 quant_config: Optional[QuantizationConfig] = None,
+                 lora_config: Optional[LoRAConfig] = None):
         super(NSModel, self).__init__()
         self.config = config
-        self.linear_method = linear_method
+        self.quant_config = quant_config
         self.lora_config = lora_config
         self.ie_model = None
         self.tokenizer = None
@@ -54,7 +57,7 @@ class NSModel(nn.Module):
                              attn_metadata.is_prompt,
                              attn_metadata.block_tables.data_ptr(),
                              attn_metadata.slot_mapping.data_ptr(),
-                             attn_metadata.prompt_lens
+                             attn_metadata.seq_lens
                              )
     
     def init_inference_engine(self, model_config: ModelConfig, parallel_config: ParallelConfig, scheduler_config: SchedulerConfig):
@@ -64,7 +67,7 @@ class NSModel(nn.Module):
     def load_weights(self, weights):
         assert sum(1 for _ in weights) > 0
         
-        qc = self.linear_method.quant_config
+        qc = self.quant_config
         self.ie_model.check_and_quantize(weight_dtype=qc.weight_dtype,
                                          alg=qc.alg,
                                          group_size=qc.group_size,
@@ -77,12 +80,12 @@ class NSModel(nn.Module):
         ns._IE_MODEL = self.ie_model
     
 class NSLLamaModel(NSModel):
-    def __init__(self, config: LlamaConfig,
-                   linear_method: Optional[LinearMethodBase],
-                   lora_config: Optional[LoRAConfig] = None):
-        super().__init__(config, linear_method, lora_config)
-
-
+    def __init__(self,
+                 config: LlamaConfig,
+                 cache_config: Optional[CacheConfig] = None,
+                 quant_config: Optional[QuantizationConfig] = None,
+                 lora_config: Optional[LoRAConfig] = None):
+        super().__init__(config, cache_config, quant_config, lora_config)
 
 def native_ptr_to_tensor(hidden_states_ptr, seq_len_sum, hidden_size):
     data = ctypes.cast(hidden_states_ptr, ctypes.POINTER(ctypes.c_float))
@@ -95,7 +98,7 @@ def execute_model(
         seq_group_metadata_list: List[SequenceGroupMetadata],
         kv_caches: List[torch.Tensor],
     ) -> Optional[SamplerOutput]:
-        (input_tokens, input_positions, attn_metadata, sampling_metadata
+        (input_tokens, input_positions, attn_metadata, sampling_metadata, multi_modal_input
          ) = self.prepare_input_tensors(seq_group_metadata_list)
         # kv cache usage
         # 0 0 -> seq_id
@@ -141,7 +144,7 @@ def execute_model(
                     assert seq_id == kv_cache[block_nbr][0][0], "seq_ids in metadata and kv_caches not match"
                     prompt_lens.append(seq_g_meta.seq_data[seq_id].get_prompt_len())
             attn_metadata.block_tables = attn_metadata.block_tables.squeeze(1) # we only have one block per sequence
-            attn_metadata.prompt_lens = prompt_lens
+            attn_metadata.seq_lens = prompt_lens
 
         model_executable = self.model
         execute_model_kwargs = {
@@ -150,6 +153,9 @@ def execute_model(
             "kv_caches": kv_caches,
             "attn_metadata": attn_metadata,
         }
+
+        if self.vision_language_config:
+            execute_model_kwargs.update({"image_input": multi_modal_input})
 
         hidden_states_ptr = model_executable(**execute_model_kwargs)
 
@@ -161,7 +167,7 @@ def execute_model(
         logits = self.model.compute_logits(hidden_states, sampling_metadata)
 
         # Only perform sampling in the driver worker.
-        if not sampling_metadata.perform_sampling:
+        if not self.is_driver_worker:
             return None
 
         # Sample the next token.

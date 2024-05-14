@@ -3,6 +3,7 @@ import importlib
 from typing import Optional
 import os
 
+from vllm.model_executor.layers.quantization.base_config import QuantizationConfig
 from vllm.model_executor.model_loader.weight_utils import get_quant_config
 
 from vllm.logger import init_logger
@@ -60,7 +61,7 @@ quant = importlib.import_module('vllm.model_executor.layers.quantization')
 
 from vllm.extension.ns.quantization.cpu_ns_config import NSQuantConfig
 
-quant._QUANTIZATION_CONFIG_REGISTRY["ns"] = NSQuantConfig
+quant.QUANTIZATION_METHODS["ns"] = NSQuantConfig
 
 logger.info("__ns extension: add ns quantization config, %s", NSQuantConfig.__name__)
 
@@ -70,7 +71,7 @@ vllm_loader = importlib.import_module('vllm.model_executor.model_loader.loader')
 old_get_model_loader = vllm_loader.get_model_loader
 
 from vllm.extension.ns.model.ns_loader import NSModelLoaderV2
-from vllm.config import LoadConfig
+from vllm.config import LoadConfig, ModelConfig
 
 def get_model_loader_ns(load_config: LoadConfig) -> vllm_loader.BaseModelLoader:
     if os.environ["NS_QUANTIZATION"] == "1":
@@ -89,6 +90,16 @@ def _get_linear_method_ns(model_config: vllm_config.ModelConfig,
     return linear_method
 
 vllm_loader._get_linear_method = _get_linear_method_ns
+
+def _get_quantization_config(
+    model_config: ModelConfig,
+    load_config: LoadConfig) -> Optional[QuantizationConfig]:
+    """Get the quantization config."""
+    if model_config.quantization is not None:
+        return get_quant_config(model_config, load_config)
+    return None
+
+vllm_loader._get_quantization_config = _get_quantization_config
 
 # reload to make above changes take effect
 model_loader = importlib.import_module('vllm.model_executor.model_loader')
