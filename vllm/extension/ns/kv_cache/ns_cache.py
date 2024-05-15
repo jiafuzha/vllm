@@ -173,7 +173,6 @@ class NSBlockSpaceManagerV1(BlockSpaceManagerV1):
     def can_append_slots(self,
                          seq_group: SequenceGroup,
                          num_lookahead_slots: int = 0) -> bool:
-        req_idx = int(seq_group.request_id)
         # collect all parent seq ids
         parent_seq_ids: Set[int] = set()
         for seq_id in seq_group.seqs_dict.keys():
@@ -245,7 +244,6 @@ class NSBlockSpaceManagerV1(BlockSpaceManagerV1):
         block_table.ref_count -= 1
         del self.block_tables[seq_id]
 
-    # TODO: parent_seq may not get freed, check block number in allocate and reassign block number if seqs have duplicate block nbr
     def fork(self, parent_seq: Sequence, child_seq: Sequence) -> None:
         super().fork(parent_seq, child_seq)
 

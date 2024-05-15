@@ -5,8 +5,10 @@ from typing import Any, Dict
 import uvicorn
 from fastapi.responses import JSONResponse, Response
 
+from vllm.extension import ns as ns
+
 import vllm.entrypoints.api_server
-from vllm.engine.arg_utils import AsyncEngineArgs
+from vllm.engine.arg_utils import AsyncEngineArgs, EngineArgs
 from vllm.engine.async_llm_engine import AsyncLLMEngine
 
 app = vllm.entrypoints.api_server.app
@@ -31,12 +33,23 @@ def stats() -> Response:
     """Get the statistics of the engine."""
     return JSONResponse(engine.testing_stats())
 
+def _modify_qunatization_choices(parser, dest, choices):
+    for action in parser._actions:
+        if action.dest == dest:
+            action.choices = choices
+            return
+    else:
+        raise ValueError("argument {} not found".format(dest))
+
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--host", type=str, default="localhost")
-    parser.add_argument("--port", type=int, default=8000)
+    parser.add_argument("--port", type=int, default=8070)
     parser = AsyncEngineArgs.add_cli_args(parser)
+    _modify_qunatization_choices(parser, "quantization", ('awq', 'gptq', 'squeezellm', 'ns', None))
+    _modify_qunatization_choices(parser, "block_size", None)
+
     args = parser.parse_args()
 
     engine_args = AsyncEngineArgs.from_cli_args(args)
